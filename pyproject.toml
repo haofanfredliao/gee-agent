@@ -1,0 +1,24 @@
+[project]
+name = "gee-agent"
+version = "0.1.0"
+description = "GEE Geo 助手 Demo：GEE + LangChain + FastAPI + Streamlit + Chroma"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "httpx>=0.26.0",
+    "streamlit>=1.28.0",
+    "pandas>=2.0.0",
+    "chromadb>=0.4.0",
+    "earthengine-api>=0.1.0",
+    "pip>=26.0.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "black"]
+
+[tool.setuptools.packages.find]
+include = ["backend*", "frontend*"]

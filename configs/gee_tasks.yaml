@@ -1,0 +1,15 @@
+# GEE 任务模板（供 agent / 前端参考）
+
+tasks:
+  - id: load_srtm
+    name: "加载 SRTM 高程"
+    task_type: load_asset
+    params:
+      asset_id: "USGS/SRTMGL1_003"
+
+  - id: ndvi_example
+    name: "NDVI 示例"
+    task_type: ndvi_example
+    params:
+      start_date: "2020-01-01"
+      end_date: "2022-12-31"

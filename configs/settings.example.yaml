@@ -1,0 +1,20 @@
+# 复制为 settings.yaml 并按需修改
+
+backend:
+  port: 8000
+  url: "http://127.0.0.1:8000"
+
+map:
+  center_lat: 22.3193
+  center_lon: 114.1694
+  zoom: 10
+
+llm:
+  default_model: "gpt-4"
+
+chroma:
+  persist_dir: "./data/chroma"
+
+# GEE 必填：你的 Google Cloud / Earth Engine 项目 ID，否则 GEE 无法启动
+gee:
+  project_id: "hku-geods-gee-project"
