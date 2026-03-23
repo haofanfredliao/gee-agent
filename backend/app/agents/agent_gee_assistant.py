@@ -87,7 +87,7 @@ async def run_gee_agent(query: str) -> ChatResponse:
             "\n[附加要求] 用户要求执行代码或可视化分析。生成代码时请严格遵守：\n"
             "1. 禁止使用 geemap，禁止 import geemap；\n"
             "2. 可视化请使用已预注入的 `Map.addLayer(ee_object, vis_params_dict, name)` — "
-            "`Map` 对象已存在于执行环境，不要重新实例化；\n"
+            "`Map` 对象已存在于执行环境，不要重新实例化，不要调用 `Map.centerObject()` 或 `Map.setCenter()`；\n"
             "3. 若涉及矢量数据 (FeatureCollection)，必须先运行 "
             "`print(collection.first().propertyNames().getInfo())` 检查实际字段名，"
             "禁止猜测或硬编码字段名（如 'Name'、'name' 等）；\n"

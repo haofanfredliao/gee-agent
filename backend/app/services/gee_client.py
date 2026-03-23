@@ -128,13 +128,14 @@ def execute_gee_code_simple(code: str) -> Dict[str, Any]:
             self.tile_url = None
         def addLayer(self, ee_object, vis_params=None, name=None, shown=True, opacity=1):
             try:
-                if isinstance(ee_object, ee.FeatureCollection):
-                    # Style default for vectors if needed, but getMapId often handles it
-                    pass
                 map_id = ee_object.getMapId(vis_params or {})
                 self.tile_url = map_id.get("tile_fetcher").url_format if map_id else None
             except Exception as e:
                 print(f"Error adding layer: {e}")
+        def centerObject(self, ee_object, zoom=None):
+            pass  # 前端由 map_update 控制中心点，此处忽略
+        def setCenter(self, lon, lat, zoom=None):
+            pass  # 同上
                 
     m = MockMap()
     old_stdout = sys.stdout
