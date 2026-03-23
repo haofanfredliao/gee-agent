@@ -7,8 +7,8 @@ import yaml
 from dotenv import load_dotenv
 
 def _project_root() -> Path:
-    # backend/app/core/config.py -> parents[3]=backend, parents[4]=project root
-    return Path(__file__).resolve().parents[4]
+    # backend/app/core/config.py -> parents[2]=backend, parents[3]=project root
+    return Path(__file__).resolve().parents[3]
 
 # 加载 .env 文件
 _env_path = _project_root() / ".env"
@@ -20,11 +20,6 @@ def _load_yaml(path: Path) -> dict:
         return {}
     with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
-
-
-def _project_root() -> Path:
-    # backend/app/core/config.py -> parents[3]=backend, parents[4]=project root
-    return Path(__file__).resolve().parents[4]
 
 
 def get_settings_path() -> Path:

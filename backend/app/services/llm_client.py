@@ -21,8 +21,8 @@ POE_BASE_URL = "https://api.poe.com/v1"
 
 
 def _get_model_config() -> dict:
-    # backend/app/services/llm_client.py -> parents[4]=project root
-    base = Path(__file__).resolve().parents[4]
+    # backend/app/services/llm_client.py -> parents[2]=backend, parents[3]=project root
+    base = Path(__file__).resolve().parents[3]
     path = base / "configs" / "models.yaml"
     if not path.exists():
         return {}

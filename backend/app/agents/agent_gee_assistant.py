@@ -83,7 +83,16 @@ async def run_gee_agent(query: str) -> ChatResponse:
     # 5) 尝试判断是否需要代码执行
     needs_exec = bool(re.search(r"执行|可视化|explore|分析", query.lower()))
     if needs_exec:
-        extra_context += "\n[附加要求] 用户要求执行代码或可视化分析。请务必提供可执行的 Python 代码段，并使用 `ee.FeatureCollection`, `ee.Image` 等，调用其 `.getInfo()` 来提取分析结果，并用 `print(...)` 打印。最后如果是空间数据，请使用类似 `Map.addLayer(obj, vis_params)` 进行展示。"
+        extra_context += (
+            "\n[附加要求] 用户要求执行代码或可视化分析。生成代码时请严格遵守：\n"
+            "1. 禁止使用 geemap，禁止 import geemap；\n"
+            "2. 可视化请使用已预注入的 `Map.addLayer(ee_object, vis_params_dict, name)` — "
+            "`Map` 对象已存在于执行环境，不要重新实例化；\n"
+            "3. 若涉及矢量数据 (FeatureCollection)，必须先运行 "
+            "`print(collection.first().propertyNames().getInfo())` 检查实际字段名，"
+            "禁止猜测或硬编码字段名（如 'Name'、'name' 等）；\n"
+            "4. 所有分析结果用 `print(...)` 打印，系统会自动捕获并展示给用户。"
+        )
 
     # 6) 调用 RAG/LLM 生成回复
     if extra_context:
