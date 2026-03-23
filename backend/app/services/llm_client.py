@@ -5,10 +5,17 @@ from typing import Optional
 
 import yaml
 
+from backend.app.core.config import get_setting
+
 try:
     import httpx
 except ImportError:
     httpx = None
+
+try:
+    import openai
+except ImportError:
+    openai = None
 
 POE_BASE_URL = "https://api.poe.com/v1"
 
@@ -49,29 +56,23 @@ async def chat_with_llm(prompt: str, model_name: Optional[str] = None) -> str:
             f"您的问题：{prompt[:200]}..."
         )
 
-    if not httpx:
-        return f"[占位] 请安装 httpx 后使用 Poe API。\n\n您的问题：{prompt[:300]}"
+    if not openai:
+        return f"[占位] 请安装 openai (pip install openai) 后使用 Poe API。\n\n您的问题：{prompt[:300]}"
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            r = await client.post(
-                f"{POE_BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model_id,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "stream": False,
-                },
-            )
-        if r.status_code != 200:
-            return f"[Poe API 错误] 状态码 {r.status_code}，响应：{r.text[:500]}"
-        data = r.json()
-        choice = (data.get("choices") or [{}])[0]
-        message = choice.get("message") or {}
-        text = message.get("content", "").strip()
+        client = openai.AsyncOpenAI(
+            api_key=api_key,
+            base_url=POE_BASE_URL,
+        )
+
+        chat = await client.chat.completions.create(
+            model=model_id,
+            messages=[{
+                "role": "user",
+                "content": prompt
+            }]
+        )
+        text = chat.choices[0].message.content.strip()
         return text or "[模型返回为空]"
     except Exception as e:
         return f"[Poe API 异常] {type(e).__name__}: {e}"

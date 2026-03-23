@@ -113,3 +113,40 @@ def run_ndvi_example(
         }
     except Exception as e:
         return {"status": "error", "message": str(e), "tile_url": None, "stats": None}
+
+def execute_gee_code_simple(code: str) -> Dict[str, Any]:
+    """执行包含 GEE API 调用的 Python 代码并返回输出及图层 URL。"""
+    if not init_gee_client():
+        return {"status": "error", "log": "GEE 未初始化", "tile_url": None}
+    
+    import io
+    import sys
+    import ee
+    
+    class MockMap:
+        def __init__(self):
+            self.tile_url = None
+        def addLayer(self, ee_object, vis_params=None, name=None, shown=True, opacity=1):
+            try:
+                if isinstance(ee_object, ee.FeatureCollection):
+                    # Style default for vectors if needed, but getMapId often handles it
+                    pass
+                map_id = ee_object.getMapId(vis_params or {})
+                self.tile_url = map_id.get("tile_fetcher").url_format if map_id else None
+            except Exception as e:
+                print(f"Error adding layer: {e}")
+                
+    m = MockMap()
+    old_stdout = sys.stdout
+    sys.stdout = captured_stdout = io.StringIO()
+    
+    local_env = {"ee": ee, "Map": m, "print": print}
+    
+    try:
+        exec(code, local_env, local_env)
+        stdout_str = captured_stdout.getvalue()
+        return {"status": "ok", "log": stdout_str, "tile_url": m.tile_url}
+    except Exception as e:
+        return {"status": "error", "log": captured_stdout.getvalue() + f"\nError: {e}", "tile_url": None}
+    finally:
+        sys.stdout = old_stdout

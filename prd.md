@@ -36,7 +36,7 @@
 
 请按以下结构生成代码骨架（可以只写出关键文件，内容允许是 TODO 占位）：
 
-```bash
+```
 gee-assistant-demo/
 ├── backend/
 │   ├── app/

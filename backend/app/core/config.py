@@ -4,7 +4,16 @@ from typing import Any, Optional
 
 import os
 import yaml
+from dotenv import load_dotenv
 
+def _project_root() -> Path:
+    # backend/app/core/config.py -> parents[3]=backend, parents[4]=project root
+    return Path(__file__).resolve().parents[4]
+
+# 加载 .env 文件
+_env_path = _project_root() / ".env"
+if _env_path.exists():
+    load_dotenv(_env_path)
 
 def _load_yaml(path: Path) -> dict:
     if not path.exists():

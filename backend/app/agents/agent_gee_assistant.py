@@ -9,7 +9,8 @@ from backend.app.agents.tools_kb import kb_search
 from backend.app.rag.chains import run_rag
 from backend.app.rag.prompts import SYSTEM_PROMPT_GEE_ASSISTANT
 from backend.app.services import llm_client
-
+from backend.app.services.gee_client import execute_gee_code_simple
+from backend.app.core.config import DEFAULT_CENTER_LAT, DEFAULT_CENTER_LON, DEFAULT_ZOOM
 
 # 简单地名关键词（可扩展）
 GEO_KEYWORDS = re.compile(
@@ -67,7 +68,6 @@ async def run_gee_agent(query: str) -> ChatResponse:
             map_update.layer_info = map_update.layer_info or {}
             map_update.layer_info["tile_url"] = load_result["tile_url"]
         elif not map_update and load_result.get("status") == "ok":
-            from backend.app.core.config import DEFAULT_CENTER_LAT, DEFAULT_CENTER_LON, DEFAULT_ZOOM
             map_update = MapUpdate(
                 center_lat=DEFAULT_CENTER_LAT,
                 center_lon=DEFAULT_CENTER_LON,
@@ -80,7 +80,12 @@ async def run_gee_agent(query: str) -> ChatResponse:
     if kb_text and "（未找到相关文档）" not in kb_text:
         extra_context += f"\n[知识库]\n{kb_text}"
 
-    # 5) 调用 RAG/LLM 生成回复
+    # 5) 尝试判断是否需要代码执行
+    needs_exec = bool(re.search(r"执行|可视化|explore|分析", query.lower()))
+    if needs_exec:
+        extra_context += "\n[附加要求] 用户要求执行代码或可视化分析。请务必提供可执行的 Python 代码段，并使用 `ee.FeatureCollection`, `ee.Image` 等，调用其 `.getInfo()` 来提取分析结果，并用 `print(...)` 打印。最后如果是空间数据，请使用类似 `Map.addLayer(obj, vis_params)` 进行展示。"
+
+    # 6) 调用 RAG/LLM 生成回复
     if extra_context:
         prompt = f"""{SYSTEM_PROMPT_GEE_ASSISTANT}
 
@@ -93,6 +98,26 @@ async def run_gee_agent(query: str) -> ChatResponse:
         reply = await llm_client.chat_with_llm(prompt)
     else:
         reply = await run_rag(query)
+
+    # 7) 自动提取并执行生成的代码
+    if needs_exec:
+        code_blocks = re.findall(r"```python(.*?)```", reply, re.DOTALL)
+        if code_blocks:
+            code = code_blocks[-1].strip()
+            exec_res = execute_gee_code_simple(code)
+            
+            # Append exec results to reply
+            reply += f"\n\n**自动执行结果**:\n```\n{exec_res['log']}\n```"
+            if exec_res.get("tile_url"):
+                if not map_update:
+                    # Default coordinates roughly over Hong Kong if no specifics previously matched
+                    map_update = MapUpdate(
+                        center_lat=22.312 if "hong" in query.lower() or "香港" in query else DEFAULT_CENTER_LAT,
+                        center_lon=114.174 if "hong" in query.lower() or "香港" in query else DEFAULT_CENTER_LON,
+                        zoom=10 if "hong" in query.lower() or "香港" in query else DEFAULT_ZOOM,
+                        layer_info=None
+                    )
+                map_update.layer_info = {"tile_url": exec_res["tile_url"]}
 
     return ChatResponse(reply=reply, map_update=map_update)
 

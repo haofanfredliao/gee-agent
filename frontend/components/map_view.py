@@ -1,8 +1,9 @@
-"""地图组件：st.map 或 pydeck 展示，支持中心、缩放与图层。"""
+"""地图组件：folium 渲染，支持 GEE tile URL 图层叠加。"""
 from typing import Any, Dict, List, Optional
 
+import folium
 import streamlit as st
-import pandas as pd
+from streamlit_folium import st_folium
 
 
 def render_map(
@@ -10,19 +11,28 @@ def render_map(
     center_lon: float = 114.1694,
     zoom: int = 10,
     layers: Optional[List[Dict[str, Any]]] = None,
+    height: int = 700,
 ) -> None:
-    """
-    渲染地图：默认以 (center_lat, center_lon) 为中心，zoom 为缩放级别。
-    layers 中若有 tile_url 等可后续叠加（当前为 TODO）。
-    """
-    # 使用 st.map 时需要一个 DataFrame，列至少包含 lat, lon
-    df = pd.DataFrame({"lat": [center_lat], "lon": [center_lon]})
-    st.map(df, zoom=zoom, use_container_width=True)
-    # TODO: 若 layers 中有 tile_url，用 pydeck 或 folium 叠加瓦片图层
+    """渲染 folium 地图，tiles 中若有 tile_url 则叠加为 GEE 图层。"""
+    m = folium.Map(
+        location=[center_lat, center_lon],
+        zoom_start=zoom,
+        tiles="CartoDB positron",
+    )
     if layers:
-        for layer in layers:
-            if layer.get("tile_url"):
-                st.caption(f"图层 URL: {layer['tile_url'][:80]}...")
+        for i, layer in enumerate(layers):
+            tile_url = layer.get("tile_url")
+            if tile_url:
+                folium.TileLayer(
+                    tiles=tile_url,
+                    attr="Google Earth Engine",
+                    name=layer.get("name", f"GEE 图层 {i + 1}"),
+                    overlay=True,
+                    control=True,
+                ).add_to(m)
+        folium.LayerControl(collapsed=False).add_to(m)
+
+    st_folium(m, width=None, height=height, returned_objects=[])
 
 
 def render_map_with_bbox(
@@ -31,5 +41,5 @@ def render_map_with_bbox(
     bbox: Optional[List[float]] = None,
     zoom: int = 10,
 ) -> None:
-    """带 bbox 时仍以中心点渲染，bbox 可用来计算合适 zoom（简化实现）。"""
+    """带 bbox 时仍以中心点渲染。"""
     render_map(center_lat=center_lat, center_lon=center_lon, zoom=zoom)
