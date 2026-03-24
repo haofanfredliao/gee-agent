@@ -14,3 +14,4 @@ wheels/
 .env.example
 
 gee_rag_data/
+data/
