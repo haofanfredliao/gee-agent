@@ -25,7 +25,7 @@ st.markdown(
 )
 
 from frontend.components.map_view import render_map
-from frontend.services.api_client import chat, get_basemap_config
+from frontend.services.api_client import chat_stream, get_basemap_config
 
 
 def _render_assistant_message(msg: dict) -> None:
@@ -106,30 +106,103 @@ with st.sidebar:
             with messages_container:
                 with st.chat_message("user"):
                     st.markdown(prompt)
-            try:
-                resp = chat(
-                    prompt,
-                    map_context={
-                        "center_lat": st.session_state["map_center_lat"],
-                        "center_lon": st.session_state["map_center_lon"],
-                        "zoom":       st.session_state["map_zoom"],
-                    },
-                )
-                reply = resp.get("reply", "")
-                assistant_msg = {
+
+            # ── 流式接收并实时渲染工作流进度 ──────────────────────────────
+            collected_steps: list = []
+            final_resp: dict = {}
+
+            with messages_container:
+                with st.chat_message("assistant"):
+                    status_placeholder = st.empty()
+                    reply_placeholder  = st.empty()
+
+                    try:
+                        # st.status 在 running 状态时立即可见，expand=True 展示细节
+                        with status_placeholder.status("🔄 工作流执行中…", expanded=True) as wf_status:
+                            for evt in chat_stream(
+                                prompt,
+                                map_context={
+                                    "center_lat": st.session_state["map_center_lat"],
+                                    "center_lon": st.session_state["map_center_lon"],
+                                    "zoom":       st.session_state["map_zoom"],
+                                },
+                            ):
+                                etype = evt.get("type")
+                                edata = evt.get("data", {})
+
+                                if etype == "routing":
+                                    intent = edata.get("intent", "")
+                                    label = "📡 意图识别：代码执行" if intent == "execution" else "📡 意图识别：知识问答"
+                                    st.write(label)
+
+                                elif etype == "planning":
+                                    plan = edata.get("plan", [])
+                                    st.write(f"📋 任务规划（共 {len(plan)} 步）：")
+                                    for i, s in enumerate(plan):
+                                        st.write(f"  ⬜ 步骤 {i+1}：{s.get('description','')}")
+
+                                elif etype == "step_start":
+                                    idx = edata.get("index", 0)
+                                    desc = edata.get("description", "")
+                                    tool = edata.get("tool", "")
+                                    wf_status.update(label=f"⏳ 步骤 {idx+1}/{len(collected_steps)+1}：{desc}")
+                                    st.write(f"⏳ **步骤 {idx+1}**：{desc}  `{tool}`")
+
+                                elif etype == "step_done":
+                                    idx = edata.get("index", 0)
+                                    desc = edata.get("description", "")
+                                    tool = edata.get("tool", "")
+                                    ok   = edata.get("success", False)
+                                    icon = "✅" if ok else "❌"
+                                    preview = (edata.get("output_preview") or "").strip()
+                                    st.write(f"{icon} **步骤 {idx+1}**：{desc}  `{tool}`")
+                                    if preview:
+                                        st.code(preview, language=None)
+                                    collected_steps.append(edata)
+
+                                elif etype == "summarizing":
+                                    wf_status.update(label="✍️ 正在汇总结果…")
+                                    st.write("✍️ 汇总中…")
+
+                                elif etype == "done":
+                                    final_resp = edata
+                                    total = len(collected_steps)
+                                    wf_status.update(
+                                        label=f"✅ 工作流完成（{total} 步）",
+                                        state="complete",
+                                        expanded=False,
+                                    )
+
+                                elif etype == "error":
+                                    wf_status.update(label="❌ 工作流出错", state="error", expanded=True)
+                                    st.error(edata.get("message", "未知错误"))
+
+                        # 在 status 下方渲染最终回复
+                        if final_resp.get("reply"):
+                            reply_placeholder.markdown(final_resp["reply"])
+
+                    except Exception as e:
+                        status_placeholder.empty()
+                        st.error(f"请求失败：{e}")
+
+            # ── 保存消息并刷新地图 ────────────────────────────────────────
+            if final_resp:
+                ws = final_resp.get("workflow_status")
+                if not ws and collected_steps:
+                    ws = {
+                        "intent": "execution",
+                        "status": "terminated",
+                        "steps_completed": len(collected_steps),
+                        "steps_total": len(collected_steps),
+                        "steps": collected_steps,
+                    }
+                st.session_state["messages"].append({
                     "role": "assistant",
-                    "content": reply,
-                    "workflow_status": resp.get("workflow_status"),
-                }
-                st.session_state["messages"].append(assistant_msg)
-                with messages_container:
-                    with st.chat_message("assistant"):
-                        _render_assistant_message(assistant_msg)
-                _apply_map_update(resp.get("map_update"))
+                    "content": final_resp.get("reply", ""),
+                    "workflow_status": ws,
+                })
+                _apply_map_update(final_resp.get("map_update"))
                 st.rerun()
-            except Exception as e:
-                with messages_container:
-                    st.error(f"请求失败：{e}")
 
         col_new, col_save = st.columns(2)
         with col_new:

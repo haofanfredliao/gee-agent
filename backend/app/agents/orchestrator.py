@@ -8,12 +8,22 @@
   5. terminated  — 返回 ChatResponse
 
 对外接口：
-  run_workflow(query, session_id) -> ChatResponse
-  (ChatResponse.workflow_status 包含完整的中间状态，可在前端展示)
+  run_workflow(query, session_id)   -> ChatResponse        （一次性返回）
+  stream_workflow(query, session_id) -> AsyncGenerator[str] （SSE 流式事件）
+
+流式事件格式（每行一个 JSON，以 \\n 结尾）：
+  {"type": "routing",    "data": {"intent": "execution"}}
+  {"type": "planning",   "data": {"plan": [{"description":..., "type":...}, ...]}}
+  {"type": "step_start", "data": {"index": 0, "description": "...", "tool": "..."}}
+  {"type": "step_done",  "data": {"index": 0, "description": "...", "tool": "...",
+                                  "success": true, "output_preview": "..."}}
+  {"type": "summarizing","data": {}}
+  {"type": "done",       "data": {"reply": "...", "map_update": {...}}}
+  {"type": "error",      "data": {"message": "..."}}
 """
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from backend.app.agents.state import WorkflowState, StepResult, make_initial_state, format_status
 from backend.app.agents.router import classify_intent
@@ -293,3 +303,92 @@ async def run_workflow(query: str, session_id: str = "") -> ChatResponse:
         map_update=map_update,
         workflow_status=workflow_status,
     )
+
+
+# ─── 流式主入口 ───────────────────────────────────────────────────────────────
+
+def _evt(event_type: str, data: Any) -> str:
+    """序列化为单行 JSON 事件（带换行符）。"""
+    return json.dumps({"type": event_type, "data": data}, ensure_ascii=False) + "\n"
+
+
+async def stream_workflow(query: str, session_id: str = "") -> AsyncGenerator[str, None]:
+    """
+    工作流流式入口：与 run_workflow 逻辑相同，但每个关键节点都立即 yield 一个事件，
+    而不是等到全部完成后一次性返回。
+
+    前端通过 httpx 流式接收，实时更新 st.status。
+    """
+    state = make_initial_state(query, session_id)
+    try:
+        # ── 1. routing ────────────────────────────────────────────────────
+        state["status"] = "routing"
+        state["intent"] = await classify_intent(query)
+        yield _evt("routing", {"intent": state["intent"]})
+
+        # 知识问答直接走 RAG
+        if state["intent"] == "knowledge":
+            yield _evt("summarizing", {})
+            from backend.app.rag.chains import run_rag
+            reply = await run_rag(query)
+            yield _evt("done", {"reply": reply, "map_update": None})
+            return
+
+        # ── 2. planning ───────────────────────────────────────────────────
+        state = await _plan(state)
+        yield _evt("planning", {
+            "plan": [
+                {"description": s.get("description", ""), "type": s.get("type", "execute")}
+                for s in state["plan"]
+            ]
+        })
+
+        # ── 3. executing ──────────────────────────────────────────────────
+        state["status"] = "executing"
+        for i, step in enumerate(state["plan"]):
+            step_type = step.get("type", "execute")
+            tool_name = "asset_inspector" if step_type == "inspect" else "gee_executor"
+            yield _evt("step_start", {
+                "index": i,
+                "description": step.get("description", f"步骤 {i+1}"),
+                "tool": tool_name,
+            })
+            state = await _execute_step(state, step, i)
+            done_result = state["steps"][-1]
+            yield _evt("step_done", {
+                "index": i,
+                "description": done_result["description"],
+                "tool": done_result["tool"],
+                "success": done_result["success"],
+                "output_preview": (done_result["output"] or "")[:300],
+            })
+
+        # ── 4. summarizing ────────────────────────────────────────────────
+        yield _evt("summarizing", {})
+        state = await _summarize(state)
+
+        # ── 5. 构建 done 事件 ─────────────────────────────────────────────
+        map_update_dict = state.get("map_update")
+        yield _evt("done", {
+            "reply": state["final_reply"] or "工作流执行完成，但未生成汇总。",
+            "map_update": map_update_dict,
+            "workflow_status": {
+                "intent": state["intent"],
+                "status": state["status"],
+                "plan": [s.get("description", "") for s in state["plan"]],
+                "steps_completed": len(state["steps"]),
+                "steps_total": len(state["plan"]),
+                "steps": [
+                    {
+                        "index": s["step_index"],
+                        "description": s["description"],
+                        "tool": s["tool"],
+                        "success": s["success"],
+                        "output_preview": (s["output"] or "")[:300],
+                    }
+                    for s in state["steps"]
+                ],
+            },
+        })
+    except Exception as exc:
+        yield _evt("error", {"message": str(exc)})
