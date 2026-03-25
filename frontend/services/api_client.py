@@ -1,12 +1,14 @@
 """前端调用后端 API 的客户端。"""
+import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Generator, Optional
 
 import httpx
 
 # 默认后端地址，可通过环境变量 OVERRIDE_BACKEND_URL 覆盖
 BASE_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8000")
-TIMEOUT = 30.0
+# 工作流需要串行多次 LLM + GEE 调用，保守设置 5 分钟
+TIMEOUT = float(os.environ.get("CHAT_TIMEOUT", "300"))
 
 
 def _url(path: str) -> str:
@@ -24,6 +26,34 @@ def chat(message: str, session_id: Optional[str] = None, map_context: Optional[D
         r = client.post(_url("/chat"), json=payload)
         r.raise_for_status()
         return r.json()
+
+
+def chat_stream(
+    message: str,
+    session_id: Optional[str] = None,
+    map_context: Optional[Dict] = None,
+) -> Generator[Dict[str, Any], None, None]:
+    """
+    流式聊天：逐行解析后端 /chat/stream 推送的 newline-delimited JSON 事件。
+
+    每次 yield 一个事件字典，type 可能为：
+      "routing" | "planning" | "step_start" | "step_done" | "summarizing" | "done" | "error"
+    """
+    payload = {"message": message}
+    if session_id:
+        payload["session_id"] = session_id
+    if map_context:
+        payload["map_context"] = map_context
+    with httpx.Client(timeout=TIMEOUT) as client:
+        with client.stream("POST", _url("/chat/stream"), json=payload) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines():
+                line = line.strip()
+                if line:
+                    try:
+                        yield json.loads(line)
+                    except json.JSONDecodeError:
+                        pass
 
 
 def geo_resolve(place_name: str) -> Dict[str, Any]:

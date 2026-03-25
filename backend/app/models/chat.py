@@ -1,5 +1,5 @@
 """聊天相关 Pydantic 模型。"""
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -26,7 +26,18 @@ class ChatRequest(BaseModel):
     map_context: Optional[MapContext] = None
 
 
+class WorkflowStatus(BaseModel):
+    """工作流执行状态摘要，供前端展示中间状态。"""
+    intent: str                        # "execution" | "knowledge"
+    status: str                        # 最终状态，通常为 "terminated"
+    plan: List[str]                    # 各步骤的描述列表
+    steps_completed: int
+    steps_total: int
+    steps: List[Dict[str, Any]] = []   # 每步详情（含 output_preview）
+
+
 class ChatResponse(BaseModel):
     """聊天响应。"""
     reply: str
     map_update: Optional[MapUpdate] = None
+    workflow_status: Optional[WorkflowStatus] = None
