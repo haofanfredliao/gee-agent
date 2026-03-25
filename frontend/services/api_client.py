@@ -6,7 +6,8 @@ import httpx
 
 # 默认后端地址，可通过环境变量 OVERRIDE_BACKEND_URL 覆盖
 BASE_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8000")
-TIMEOUT = 30.0
+# 工作流需要串行多次 LLM + GEE 调用，保守设置 5 分钟
+TIMEOUT = float(os.environ.get("CHAT_TIMEOUT", "300"))
 
 
 def _url(path: str) -> str:

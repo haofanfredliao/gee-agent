@@ -27,6 +27,26 @@ st.markdown(
 from frontend.components.map_view import render_map
 from frontend.services.api_client import chat, get_basemap_config
 
+
+def _render_assistant_message(msg: dict) -> None:
+    """渲染助手消息：若包含 workflow_status，先展示分步骤状态，再展示最终回复。"""
+    ws = msg.get("workflow_status")
+    if ws and ws.get("intent") == "execution" and ws.get("steps"):
+        steps = ws["steps"]
+        total = ws.get("steps_total", len(steps))
+        completed = ws.get("steps_completed", len(steps))
+        label = f"工作流执行完成（{completed}/{total} 步）"
+        # st.status 在 expanded=False 时以折叠态显示已完成的过程
+        with st.status(label, state="complete", expanded=False):
+            for s in steps:
+                icon = "✅" if s.get("success") else "❌"
+                tool_tag = f"`{s.get('tool', '')}`" if s.get("tool") else ""
+                st.markdown(f"{icon} **步骤 {s['index'] + 1}**：{s.get('description', '')}  {tool_tag}")
+                preview = (s.get("output_preview") or "").strip()
+                if preview:
+                    st.code(preview, language=None)
+    st.markdown(msg["content"])
+
 # ── Session state 初始化 ───────────────────────────────────────────────────────
 config = get_basemap_config()
 
@@ -75,7 +95,10 @@ with st.sidebar:
         with messages_container:
             for msg in st.session_state["messages"]:
                 with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
+                    if msg["role"] == "assistant":
+                        _render_assistant_message(msg)
+                    else:
+                        st.markdown(msg["content"])
 
         prompt = st.chat_input("与 GEE 助手对话…")
         if prompt:
@@ -93,10 +116,15 @@ with st.sidebar:
                     },
                 )
                 reply = resp.get("reply", "")
-                st.session_state["messages"].append({"role": "assistant", "content": reply})
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": reply,
+                    "workflow_status": resp.get("workflow_status"),
+                }
+                st.session_state["messages"].append(assistant_msg)
                 with messages_container:
                     with st.chat_message("assistant"):
-                        st.markdown(reply)
+                        _render_assistant_message(assistant_msg)
                 _apply_map_update(resp.get("map_update"))
                 st.rerun()
             except Exception as e:
