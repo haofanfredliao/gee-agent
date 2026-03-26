@@ -32,7 +32,7 @@ from backend.app.tools.explanation.kb_lookup import knowledge_base_lookup
 from backend.app.tools.execution.gee_executor import execute_gee_snippet
 from backend.app.models.chat import ChatResponse, MapUpdate, WorkflowStatus
 from backend.app.services import llm_client
-from backend.app.rag.prompts import PLANNER_PROMPT, CODE_GEN_PROMPT, SUMMARIZE_PROMPT
+from backend.app.rag.prompts import PLANNER_PROMPT, CODE_GEN_PROMPT, CODE_REPAIR_PROMPT, SUMMARIZE_PROMPT
 from backend.app.core.config import DEFAULT_CENTER_LAT, DEFAULT_CENTER_LON, DEFAULT_ZOOM
 
 # ─── 辅助函数 ────────────────────────────────────────────────────────────────
@@ -181,8 +181,30 @@ async def _execute_step(
         else:
             code = code_blocks[-1].strip()
 
-            # Act：执行代码
+            # Act：执行代码（含 repair 子循环，最多重试 3 次）
+            MAX_REPAIR_ATTEMPTS = 3
             exec_result = execute_gee_snippet(code)
+            for attempt in range(1, MAX_REPAIR_ATTEMPTS + 1):
+                if exec_result["status"] == "ok":
+                    break
+                error_log = exec_result.get("log", "")
+                repair_prompt = CODE_REPAIR_PROMPT.format(
+                    query=state["query"],
+                    step_description=description,
+                    context_section=context_section,
+                    original_code=code,
+                    error_log=error_log,
+                    attempt=attempt,
+                )
+                repair_response = await llm_client.chat_with_llm(repair_prompt)
+                repaired_blocks = re.findall(r"```python(.*?)```", repair_response, re.DOTALL)
+                if not repaired_blocks:
+                    repaired_blocks = re.findall(r"```(.*?)```", repair_response, re.DOTALL)
+                if not repaired_blocks:
+                    break
+                code = repaired_blocks[-1].strip()
+                exec_result = execute_gee_snippet(code)
+
             result["output"] = exec_result.get("log", "")
             result["tile_url"] = exec_result.get("tile_url")
             result["success"] = exec_result["status"] == "ok"

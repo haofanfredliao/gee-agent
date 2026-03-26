@@ -74,6 +74,36 @@ CODE_GEN_PROMPT = """\
 只输出可直接执行的 Python 代码块（用 ```python ... ``` 包裹），不要有额外解释。
 """
 
+CODE_REPAIR_PROMPT = """\
+你是一个 GEE 代码修复器。上一段代码执行失败，请修复它。
+
+用户总需求：
+{query}
+
+当前步骤任务：
+{step_description}
+
+{context_section}
+
+原始代码：
+```python
+{original_code}
+```
+
+执行错误（第 {attempt} 次尝试）：
+{error_log}
+
+【修复规则 — 严格遵守】
+1. 禁止使用 geemap，禁止调用 .style() 方法（Python earthengine-api 不支持此方法）。
+2. 禁止在循环中调用 .getInfo()，应改用 reduceRegions 或 reduceToVectors 进行批量计算。
+3. 使用 stratifiedSample 时必须指定 scale 参数（建议 30 或更大），不需要几何信息时设 geometries=False。
+4. 禁止猜测属性字段名，必须使用上下文中提供的实际字段名。
+5. 所有需要展示的结果用 print(...) 输出，不要调用 ee.Initialize() 或 ee.Authenticate()。
+6. 禁止重新实例化 Map，不要调用 Map.centerObject() 或 Map.setCenter()。
+
+只输出修复后的完整 Python 代码块（用 ```python ... ``` 包裹），不要有任何额外解释。
+"""
+
 SUMMARIZE_PROMPT = """\
 你是一个 GEE 数据分析助手，请根据以下工作流执行结果，用清晰的中文给用户一个完整的汇总回答。
 
