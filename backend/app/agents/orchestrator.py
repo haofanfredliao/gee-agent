@@ -30,9 +30,15 @@ from backend.app.agents.router import classify_intent
 from backend.app.tools.explanation.asset_inspector import inspect_asset
 from backend.app.tools.explanation.kb_lookup import knowledge_base_lookup
 from backend.app.tools.execution.gee_executor import execute_gee_snippet
+from backend.app.agents.prompts import (
+    PLANNER_PROMPT,
+    CODE_GEN_PROMPT,
+    CODE_REPAIR_PROMPT,
+    SUMMARIZE_PROMPT,
+    KNOWLEDGE_PROMPT,
+)
 from backend.app.models.chat import ChatResponse, MapUpdate, WorkflowStatus
 from backend.app.services import llm_client
-from backend.app.rag.prompts import PLANNER_PROMPT, CODE_GEN_PROMPT, CODE_REPAIR_PROMPT, SUMMARIZE_PROMPT
 from backend.app.core.config import DEFAULT_CENTER_LAT, DEFAULT_CENTER_LON, DEFAULT_ZOOM
 
 # ─── 辅助函数 ────────────────────────────────────────────────────────────────
@@ -249,6 +255,16 @@ async def _summarize(state: WorkflowState) -> WorkflowState:
     return state
 
 
+async def _answer_knowledge(query: str) -> str:
+    """知识问答：先检索知识库，再基于检索结果调用 LLM。"""
+    kb_context = knowledge_base_lookup(query, k=4)
+    prompt = KNOWLEDGE_PROMPT.format(
+        query=query,
+        kb_context=kb_context,
+    )
+    return await llm_client.chat_with_llm(prompt)
+
+
 # ─── 主入口 ──────────────────────────────────────────────────────────────────
 
 async def run_workflow(query: str, session_id: str = "") -> ChatResponse:
@@ -264,16 +280,15 @@ async def run_workflow(query: str, session_id: str = "") -> ChatResponse:
     state["status"] = "routing"
     state["intent"] = await classify_intent(query)
 
-    # 知识问答直接走 RAG，不走多步工作流
+    # 知识问答：走检索增强的单步回答，不进入多步执行工作流
     if state["intent"] == "knowledge":
-        from backend.app.rag.chains import run_rag
-        reply = await run_rag(query)
+        reply = await _answer_knowledge(query)
         return ChatResponse(
             reply=reply,
             workflow_status=WorkflowStatus(
                 intent="knowledge",
                 status="terminated",
-                plan=["知识库检索与直接问答"],
+                plan=["知识库检索与问答"],
                 steps_completed=1,
                 steps_total=1,
                 steps=[],
@@ -348,11 +363,10 @@ async def stream_workflow(query: str, session_id: str = "") -> AsyncGenerator[st
         state["intent"] = await classify_intent(query)
         yield _evt("routing", {"intent": state["intent"]})
 
-        # 知识问答直接走 RAG
+        # 知识问答：走检索增强的单步回答
         if state["intent"] == "knowledge":
             yield _evt("summarizing", {})
-            from backend.app.rag.chains import run_rag
-            reply = await run_rag(query)
+            reply = await _answer_knowledge(query)
             yield _evt("done", {"reply": reply, "map_update": None})
             return
 

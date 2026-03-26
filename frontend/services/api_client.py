@@ -56,28 +56,11 @@ def chat_stream(
                         pass
 
 
-def geo_resolve(place_name: str) -> Dict[str, Any]:
-    """地名解析，返回 center_lat, center_lon, bbox。"""
-    with httpx.Client(timeout=TIMEOUT) as client:
-        r = client.post(_url("/geo/resolve"), json={"place_name": place_name})
-        r.raise_for_status()
-        return r.json()
-
-
-def run_gee_task(task_type: str, params: Optional[Dict] = None) -> Dict[str, Any]:
-    """执行 GEE 任务：load_asset 或 ndvi_example。"""
-    payload = {"task_type": task_type, "params": params or {}}
-    with httpx.Client(timeout=TIMEOUT) as client:
-        r = client.post(_url("/gee/run"), json=payload)
-        r.raise_for_status()
-        return r.json()
-
-
 def get_basemap_config() -> Dict[str, Any]:
-    """获取底图配置：优先调用 GET /gee/basemap。"""
+    """获取底图配置：优先调用 GET /chat/basemap。"""
     try:
         with httpx.Client(timeout=5.0) as client:
-            r = client.get(_url("/gee/basemap"))
+            r = client.get(_url("/chat/basemap"))
             if r.status_code == 200:
                 return r.json()
     except Exception:

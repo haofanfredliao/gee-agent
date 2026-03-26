@@ -3,7 +3,7 @@
 封装 Chroma 向量检索，供 orchestrator 在规划或执行步骤中
 查询与当前任务相关的 GEE API 文档和知识。
 """
-from backend.app.agents.tools_kb import kb_search
+from backend.app.services import chroma_store
 
 
 def knowledge_base_lookup(query: str, k: int = 3) -> str:
@@ -21,4 +21,7 @@ def knowledge_base_lookup(query: str, k: int = 3) -> str:
     -------
     拼接后的文本字符串，或"（未找到相关文档）"。
     """
-    return kb_search(query, k=k)
+    hits = chroma_store.similarity_search(query, k=k)
+    if not hits:
+        return "（未找到相关文档）"
+    return "\n\n".join(h["content"] for h in hits)

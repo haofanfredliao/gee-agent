@@ -3,8 +3,19 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from backend.app.models.chat import ChatRequest, ChatResponse
 from backend.app.agents.orchestrator import run_workflow, stream_workflow
+from backend.app.core.config import DEFAULT_CENTER_LAT, DEFAULT_CENTER_LON, DEFAULT_ZOOM
 
 router = APIRouter()
+
+
+@router.get("/basemap")
+def chat_basemap():
+    """返回聊天页面默认底图配置。"""
+    return {
+        "center_lat": DEFAULT_CENTER_LAT,
+        "center_lon": DEFAULT_CENTER_LON,
+        "zoom": DEFAULT_ZOOM,
+    }
 
 
 @router.post("", response_model=ChatResponse)

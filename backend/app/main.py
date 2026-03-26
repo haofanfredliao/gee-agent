@@ -3,8 +3,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.api.routes_chat import router as chat_router
-from backend.app.api.routes_geo import router as geo_router
-from backend.app.api.routes_gee import router as gee_router
 
 app = FastAPI(title="GEE Geo Assistant API", version="0.1.0")
 
@@ -23,5 +21,3 @@ def health():
 
 
 app.include_router(chat_router, prefix="/chat", tags=["chat"])
-app.include_router(geo_router, prefix="/geo", tags=["geo"])
-app.include_router(gee_router, prefix="/gee", tags=["gee"])
