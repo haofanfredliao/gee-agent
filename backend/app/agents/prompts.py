@@ -10,6 +10,7 @@ PLANNER_PROMPT = """\
 用户请求：
 {query}
 
+{session_section}
 请将上述请求分解为有序的子步骤，以 JSON 数组格式返回。
 每个步骤是一个对象，包含以下字段：
   - "description" : 步骤的中文描述（简洁，15 字以内）
@@ -22,6 +23,7 @@ PLANNER_PROMPT = """\
 1. 若 query 中含有 asset 路径，必须先安排一个 inspect 步骤，再安排 execute 步骤。
 2. 步骤总数控制在 2–4 步，不要过度拆解。
 3. 只输出 JSON 数组，不要有任何额外说明或 markdown 标记。
+4. 若会话上下文中已有 asset_id 或区域信息，可直接复用，无需重新 inspect。
 
 示例输出：
 [
@@ -40,6 +42,8 @@ CODE_GEN_PROMPT = """\
 {step_description}
 
 {context_section}
+
+{session_section}
 
 【代码生成规则 — 严格遵守】
 1. 禁止使用 geemap，禁止写 import geemap。
@@ -99,6 +103,16 @@ SUMMARIZE_PROMPT = """\
 - 如已添加可视化图层，简要说明
 
 回答要简洁、准确、直面用户的问题，不要重复已知信息。
+"""
+
+GEO_REPLY_PROMPT = """\
+你是 GEE 助手的地图导航助手。用户请求定位一个地点，系统已完成地理编码，请用简洁的中文确认定位结果。
+
+地名：{place_name}
+中心坐标：({center_lat:.5f}, {center_lon:.5f})
+边界框：{bbox}
+
+请用一句话告知用户地图已跳转到该地点，并列出坐标供参考。不要编造其他信息。
 """
 
 KNOWLEDGE_PROMPT = """\

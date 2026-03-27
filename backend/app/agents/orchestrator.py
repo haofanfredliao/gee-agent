@@ -31,12 +31,14 @@ from backend.app.agents.router import classify_intent
 from backend.app.tools.explanation.asset_inspector import inspect_asset
 from backend.app.tools.explanation.kb_lookup import knowledge_base_lookup
 from backend.app.tools.execution.gee_executor import execute_gee_snippet
+from backend.app.tools.geo.geocoder import resolve_place
 from backend.app.agents.prompts import (
     PLANNER_PROMPT,
     CODE_GEN_PROMPT,
     CODE_REPAIR_PROMPT,
     SUMMARIZE_PROMPT,
     KNOWLEDGE_PROMPT,
+    GEO_REPLY_PROMPT,
 )
 from backend.app.models.chat import ChatResponse, MapUpdate, WorkflowStatus
 from backend.app.services import llm_client
@@ -70,6 +72,34 @@ def _build_context_section(context: Dict[str, Any]) -> str:
     return "已知数据上下文（由前序检查步骤获得）：\n" + "\n".join(f"  - {p}" for p in parts)
 
 
+def _build_session_section(state: WorkflowState) -> str:
+    """将 session 级别上下文格式化为 prompt 中的对话历史/区域感知段落。"""
+    parts: List[str] = []
+    sc = state.get("session_context") or {}
+
+    map_ctx = sc.get("map_context") or {}
+    if map_ctx.get("center_lat") and map_ctx.get("center_lon"):
+        parts.append(
+            f"当前地图区域：中心 ({map_ctx['center_lat']:.5f}, {map_ctx['center_lon']:.5f})，"
+            f"缩放级别 {map_ctx.get('zoom', '未知')}"
+        )
+
+    last_q = sc.get("last_query")
+    last_r = sc.get("last_reply")
+    if last_q:
+        parts.append(f"上一轮用户请求：{last_q[:120]}")
+    if last_r:
+        parts.append(f"上一轮助手回复摘要：{last_r[:200]}")
+
+    asset_id = sc.get("asset_id")
+    if asset_id:
+        parts.append(f"上一轮使用的 Asset：{asset_id}")
+
+    if not parts:
+        return ""
+    return "\n".join(["【会话上下文 — 可复用以下信息】"] + [f"  - {p}" for p in parts])
+
+
 # ─── 规划阶段 ────────────────────────────────────────────────────────────────
 
 async def _plan(state: WorkflowState) -> WorkflowState:
@@ -80,7 +110,10 @@ async def _plan(state: WorkflowState) -> WorkflowState:
     若解析失败，则根据 query 中是否含有 asset 路径生成默认计划。
     """
     state["status"] = "planning"
-    raw = await llm_client.chat_with_llm(PLANNER_PROMPT.format(query=state["query"]))
+    session_section = _build_session_section(state)
+    raw = await llm_client.chat_with_llm(
+        PLANNER_PROMPT.format(query=state["query"], session_section=session_section)
+    )
 
     plan: List[Dict[str, Any]] = []
     try:
@@ -168,12 +201,14 @@ async def _execute_step(
     elif step_type == "execute":
         result["tool"] = "gee_executor"
 
-        # Think：LLM 生成代码，注入从 inspect 步骤获得的 context
+        # Think：LLM 生成代码，注入从 inspect 步骤获得的 context 和 session context
         context_section = _build_context_section(state["context"])
+        session_section = _build_session_section(state)
         code_prompt = CODE_GEN_PROMPT.format(
             query=state["query"],
             step_description=description,
             context_section=context_section,
+            session_section=session_section,
         )
         llm_response = await llm_client.chat_with_llm(code_prompt)
 
@@ -196,13 +231,13 @@ async def _execute_step(
                     break
                 error_log = exec_result.get("log", "")
                 repair_prompt = CODE_REPAIR_PROMPT.format(
-                    query=state["query"],
-                    step_description=description,
-                    context_section=context_section,
-                    original_code=code,
-                    error_log=error_log,
-                    attempt=attempt,
-                )
+                        query=state["query"],
+                        step_description=description,
+                        context_section=context_section,
+                        original_code=code,
+                        error_log=error_log,
+                        attempt=attempt,
+                    )
                 repair_response = await llm_client.chat_with_llm(repair_prompt)
                 repaired_blocks = re.findall(r"```python(.*?)```", repair_response, re.DOTALL)
                 if not repaired_blocks:
@@ -216,13 +251,12 @@ async def _execute_step(
             result["tile_url"] = exec_result.get("tile_url")
             result["success"] = exec_result["status"] == "ok"
 
-            # 更新地图 state
+            # 更新地图 state：优先使用 session 中已知的地图中心
             if exec_result.get("tile_url"):
-                q = state["query"].lower()
-                if "hong" in q or "香港" in q or "hk" in q:
-                    center_lat, center_lon, zoom = 22.312, 114.174, 10
-                else:
-                    center_lat, center_lon, zoom = DEFAULT_CENTER_LAT, DEFAULT_CENTER_LON, DEFAULT_ZOOM
+                map_ctx = (state.get("session_context") or {}).get("map_context") or {}
+                center_lat = map_ctx.get("center_lat") or DEFAULT_CENTER_LAT
+                center_lon = map_ctx.get("center_lon") or DEFAULT_CENTER_LON
+                zoom = map_ctx.get("zoom") or DEFAULT_ZOOM
                 state["map_update"] = {
                     "center_lat": center_lat,
                     "center_lon": center_lon,
@@ -266,6 +300,50 @@ async def _answer_knowledge(query: str) -> str:
     return await llm_client.chat_with_llm(prompt)
 
 
+async def _handle_geo_query(
+    query: str,
+    session_id: str,
+    existing_map_context: Optional[Dict[str, Any]],
+) -> tuple[Optional[MapUpdate], str]:
+    """地名定位分支：调用 geocoder tool，生成 map_update 和自然语言回复。
+
+    Returns (map_update, reply_text)
+    """
+    # 从 query 中简单提取地名（取最后一个中/英名词段）
+    place = query.strip()
+    geo = resolve_place(place)
+    if geo["status"] != "ok":
+        reply = f"抱歉，无法定位「{place}」，请检查地名是否正确。"
+        return None, reply
+
+    map_update = MapUpdate(
+        center_lat=geo["center_lat"],
+        center_lon=geo["center_lon"],
+        zoom=geo["zoom"],
+        layer_info=None,
+    )
+    new_map_ctx = {
+        "center_lat": geo["center_lat"],
+        "center_lon": geo["center_lon"],
+        "zoom": geo["zoom"],
+    }
+    save_session_state(
+        session_id,
+        map_context=new_map_ctx,
+        last_query=query,
+    )
+
+    reply = await llm_client.chat_with_llm(
+        GEO_REPLY_PROMPT.format(
+            place_name=geo["place_name"],
+            center_lat=geo["center_lat"],
+            center_lon=geo["center_lon"],
+            bbox=geo["bbox"],
+        )
+    )
+    return map_update, reply
+
+
 # ─── 主入口 ──────────────────────────────────────────────────────────────────
 
 async def run_workflow(
@@ -303,6 +381,23 @@ async def run_workflow(
                 intent="knowledge",
                 status="terminated",
                 plan=["知识库检索与问答"],
+                steps_completed=1,
+                steps_total=1,
+                steps=[],
+            ),
+        )
+
+    # 地名定位：直接调用 geocoder tool
+    if state["intent"] == "geo_query":
+        map_update, reply = await _handle_geo_query(query, session_id, map_context)
+        save_session_state(session_id, last_reply=reply)
+        return ChatResponse(
+            reply=reply,
+            map_update=map_update,
+            workflow_status=WorkflowStatus(
+                intent="geo_query",
+                status="terminated",
+                plan=["地名解析与地图定位"],
                 steps_completed=1,
                 steps_total=1,
                 steps=[],
@@ -410,6 +505,17 @@ async def stream_workflow(
                 last_reply=reply,
             )
             yield _evt("done", {"reply": reply, "map_update": None})
+            return
+
+        # 地名定位：直接走 geocoder，单步完成
+        if state["intent"] == "geo_query":
+            yield _evt("summarizing", {})
+            map_update, reply = await _handle_geo_query(query, session_id, map_context)
+            save_session_state(session_id, last_reply=reply)
+            yield _evt("done", {
+                "reply": reply,
+                "map_update": map_update.model_dump() if map_update else None,
+            })
             return
 
         # ── 2. planning ───────────────────────────────────────────────────
