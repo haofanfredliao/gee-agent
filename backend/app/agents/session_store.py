@@ -23,6 +23,7 @@ def _ensure(session_id: str) -> Dict[str, Any]:
             "map_context": {},
             "last_query": None,
             "last_reply": None,
+            "chat_history": [],
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
     return _SESSIONS[sid]
@@ -57,3 +58,15 @@ def save_session_state(
 def load_map_context(session_id: str) -> Dict[str, Any]:
     """Load latest known map context for a session."""
     return deepcopy(_ensure(session_id).get("map_context", {}))
+
+
+def save_chat_history(session_id: str, messages: list) -> None:
+    """Persist the full conversation message list for a session."""
+    record = _ensure(session_id)
+    record["chat_history"] = list(messages)
+    record["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def load_chat_history(session_id: str) -> list:
+    """Return a copy of the stored conversation messages for a session."""
+    return deepcopy(_ensure(session_id).get("chat_history", []))

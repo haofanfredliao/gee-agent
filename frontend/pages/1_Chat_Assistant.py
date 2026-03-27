@@ -25,7 +25,7 @@ st.markdown(
 )
 
 from frontend.components.map_view import render_map
-from frontend.services.api_client import chat_stream, get_basemap_config
+from frontend.services.api_client import chat_stream, get_basemap_config, save_history
 import uuid
 
 
@@ -83,6 +83,8 @@ def _save_to_history():
         "新对话",
     )
     st.session_state["history"].insert(0, {"title": title, "messages": msgs.copy()})
+    # 持久化到后端（静默失败，不阻断 UI）
+    save_history(st.session_state["session_id"], msgs)
     st.session_state["messages"] = []
     st.session_state["map_layers"] = []
 

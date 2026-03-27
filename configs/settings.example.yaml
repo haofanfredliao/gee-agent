@@ -18,3 +18,10 @@ chroma:
 # GEE 必填：你的 Google Cloud / Earth Engine 项目 ID，否则 GEE 无法启动
 gee:
   project_id: "hku-geods-gee-project"
+
+# 安全：生产部署时将 allowed_origins 改为实际前端域名
+# 留空或删除此节表示允许所有来源（开发模式）
+security:
+  allowed_origins:
+    - "http://localhost:8501"
+    - "http://127.0.0.1:8501"

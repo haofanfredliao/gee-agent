@@ -2,6 +2,28 @@
 
 These prompts are used by the ReAct-style workflow orchestrator and intentionally
 live under agents/ instead of rag/.
+
+GEE sandbox execution rules are consolidated in sandbox/env_rules.py
+(SANDBOX_CONSTRAINTS_BLOCK) and imported here to avoid duplication across
+CODE_GEN_PROMPT and CODE_REPAIR_PROMPT.
+"""
+from backend.app.sandbox.env_rules import SANDBOX_CONSTRAINTS_BLOCK
+
+# ─── 助手身份：高层稳定身份描述（不含沙箱执行细节）────────────────────────────
+GEE_ASSISTANT_SYSTEM_PROMPT = """\
+你是一个专业的 Google Earth Engine (GEE) 智能助手。
+
+核心能力：
+- 规划并执行 GEE 遥感分析任务（影像处理、矢量分析、空间统计）
+- 检索 GEE API 文档与数据集知识库，回答技术问题
+- 辅助地图导航：解析地名、更新地图视角
+
+工作方式：
+- 先理解用户意图，再通过有序步骤（inspect → execute）完成任务
+- 每步均在安全沙箱中执行 LLM 生成的代码，并捕获输出
+- 对多轮对话保持上下文感知，复用已获取的数据集信息
+
+回答风格：简洁、准确、以结论为先，必要时附代码或数据细节。
 """
 
 PLANNER_PROMPT = """\
@@ -45,16 +67,7 @@ CODE_GEN_PROMPT = """\
 
 {session_section}
 
-【代码生成规则 — 严格遵守】
-1. 禁止使用 geemap，禁止写 import geemap。
-2. 可视化图层时使用预注入的 Map 对象：
-     Map.addLayer(ee_object, vis_params_dict, "图层名称")
-   Map 已存在于执行环境，不要重新实例化，不要调用 Map.centerObject() 或 Map.setCenter()。
-3. 根据上下文中提供的实际字段名编写代码，禁止猜测或硬编码字段名。
-4. 所有需要展示的结果用 print(...) 输出。
-5. 不要调用 ee.Initialize() 或 ee.Authenticate()。
-6. 若需要计算面积，使用 .area() 方法并指定单位（如 .divide(1e6) 转换为平方公里）。
-
+""" + SANDBOX_CONSTRAINTS_BLOCK + """
 只输出可直接执行的 Python 代码块（用 ```python ... ``` 包裹），不要有额外解释。
 """
 
@@ -77,14 +90,7 @@ CODE_REPAIR_PROMPT = """\
 执行错误（第 {attempt} 次尝试）：
 {error_log}
 
-【修复规则 — 严格遵守】
-1. 禁止使用 geemap，禁止调用 .style() 方法（Python earthengine-api 不支持此方法）。
-2. 禁止在循环中调用 .getInfo()，应改用 reduceRegions 或 reduceToVectors 进行批量计算。
-3. 使用 stratifiedSample 时必须指定 scale 参数（建议 30 或更大），不需要几何信息时设 geometries=False。
-4. 禁止猜测属性字段名，必须使用上下文中提供的实际字段名。
-5. 所有需要展示的结果用 print(...) 输出，不要调用 ee.Initialize() 或 ee.Authenticate()。
-6. 禁止重新实例化 Map，不要调用 Map.centerObject() 或 Map.setCenter()。
-
+""" + SANDBOX_CONSTRAINTS_BLOCK + """
 只输出修复后的完整 Python 代码块（用 ```python ... ``` 包裹），不要有任何额外解释。
 """
 

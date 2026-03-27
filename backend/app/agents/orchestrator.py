@@ -23,6 +23,7 @@
 """
 import json
 import re
+import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from backend.app.agents.state import WorkflowState, StepResult, make_initial_state, format_status
@@ -42,6 +43,7 @@ from backend.app.agents.prompts import (
 )
 from backend.app.models.chat import ChatResponse, MapUpdate, WorkflowStatus
 from backend.app.services import llm_client
+from backend.app.services.log_store import write_log
 from backend.app.core.config import DEFAULT_CENTER_LAT, DEFAULT_CENTER_LON, DEFAULT_ZOOM
 
 # ─── 辅助函数 ────────────────────────────────────────────────────────────────
@@ -360,6 +362,7 @@ async def run_workflow(
     state = make_initial_state(query, session_id)
     state["session_context"] = load_session_context(session_id)
     state["context"].update(state["session_context"])
+    _t0 = time.monotonic()
 
     # ── 1. routing ────────────────────────────────────────────────────────
     state["status"] = "routing"
@@ -375,6 +378,8 @@ async def run_workflow(
             last_query=query,
             last_reply=reply,
         )
+        write_log(session_id, intent="knowledge", query=query, plan_steps=1,
+                  reply_preview=reply, duration_ms=int((time.monotonic()-_t0)*1000))
         return ChatResponse(
             reply=reply,
             workflow_status=WorkflowStatus(
@@ -391,6 +396,8 @@ async def run_workflow(
     if state["intent"] == "geo_query":
         map_update, reply = await _handle_geo_query(query, session_id, map_context)
         save_session_state(session_id, last_reply=reply)
+        write_log(session_id, intent="geo_query", query=query, plan_steps=1,
+                  reply_preview=reply, duration_ms=int((time.monotonic()-_t0)*1000))
         return ChatResponse(
             reply=reply,
             map_update=map_update,
@@ -458,6 +465,10 @@ async def run_workflow(
         last_query=query,
         last_reply=state["final_reply"],
     )
+    write_log(session_id, intent="execution", query=query,
+              plan_steps=len(state["plan"]),
+              reply_preview=state["final_reply"] or "",
+              duration_ms=int((time.monotonic()-_t0)*1000))
 
     return ChatResponse(
         reply=state["final_reply"] or "工作流执行完成，但未生成汇总。",
@@ -487,6 +498,7 @@ async def stream_workflow(
     state = make_initial_state(query, session_id)
     state["session_context"] = load_session_context(session_id)
     state["context"].update(state["session_context"])
+    _t0 = time.monotonic()
     try:
         # ── 1. routing ────────────────────────────────────────────────────
         state["status"] = "routing"
@@ -504,6 +516,8 @@ async def stream_workflow(
                 last_query=query,
                 last_reply=reply,
             )
+            write_log(session_id, intent="knowledge", query=query, plan_steps=1,
+                      reply_preview=reply, duration_ms=int((time.monotonic()-_t0)*1000))
             yield _evt("done", {"reply": reply, "map_update": None})
             return
 
@@ -512,6 +526,8 @@ async def stream_workflow(
             yield _evt("summarizing", {})
             map_update, reply = await _handle_geo_query(query, session_id, map_context)
             save_session_state(session_id, last_reply=reply)
+            write_log(session_id, intent="geo_query", query=query, plan_steps=1,
+                      reply_preview=reply, duration_ms=int((time.monotonic()-_t0)*1000))
             yield _evt("done", {
                 "reply": reply,
                 "map_update": map_update.model_dump() if map_update else None,
@@ -567,6 +583,10 @@ async def stream_workflow(
             last_query=query,
             last_reply=state["final_reply"],
         )
+        write_log(session_id, intent="execution", query=query,
+                  plan_steps=len(state["plan"]),
+                  reply_preview=state["final_reply"] or "",
+                  duration_ms=int((time.monotonic()-_t0)*1000))
         yield _evt("done", {
             "reply": state["final_reply"] or "工作流执行完成，但未生成汇总。",
             "map_update": map_update_dict,

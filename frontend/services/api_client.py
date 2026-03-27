@@ -66,3 +66,16 @@ def get_basemap_config() -> Dict[str, Any]:
     except Exception:
         pass
     return {"center_lat": 22.3193, "center_lon": 114.1694, "zoom": 10}
+
+
+def save_history(session_id: str, messages: list) -> bool:
+    """将对话历史持久化到后端 POST /chat/history，失败时静默返回 False。"""
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            r = client.post(
+                _url("/chat/history"),
+                json={"session_id": session_id, "messages": messages},
+            )
+            return r.status_code == 200
+    except Exception:
+        return False

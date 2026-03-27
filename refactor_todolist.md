@@ -152,3 +152,29 @@
 **9.3 清理 `models/` 只保留 chat 相关**
 - 随 v1 路由废除，`models/geo.py` 和 `models/gee.py` 可删除
 - `models/chat.py` 中 `WorkflowStatus` 可考虑合并进 `agents/state.py`，减少 models 层的概念碎片
+
+
+---
+
+**用户query：**
+
+我在思考重构代码的问题，目前主要的问题是这样的：
+readme显示了根据prd.md得到第一版模型：一个只通过system prompt单线llm简易agent，且除了chat_assistant之外还做了map_explorer，专用于输入地点名，返回坐标并在地图上展示（目前已经在frontend/pages中被删除），app中的部分功能的组织形式（如sevices/，models/）仍处于第一版模型的设计阶段。
+在第一版模型后，代码迎来了几次较大的前后端功能迭代：
+1. 增加了llm生成代码的执行能力和前端地图渲染能力，分别被放在了backend/app/services/gee_client.py和backend/app/tools/execution/gee_executor.py中
+2. 将单向的简单agent流程重构成了react架构的多状态流转agent系统，核型是/Users/fred/Code/gee-agent/backend/app/agents/orchestrator.py，它不断管理和更新state，不断进行观察-思考-执行的循环
+3. 前端同步的聊天框可以流式接受大模型的输出，sidebar中有新对话和保存对话，通过历史记录进入历史对话等功能（部分功能对应后端逻辑仍未实现）
+
+之后的迭代方向是这样的：
+1. 强化orchestrator的能力，让他除了流转一次用户请求所带来的状态以外，增加其管理session内变量值的能力，在用户行为被分为多步时，不至于在新的一步开始的时候没有任何上一步的信息
+2. 在app/目录下设定sandbox/子目录，将llm的代码执行（目前在gee_executor）隔离开，并且将目前在SYSTEM_PROMPT_GEE_ASSISTANT中的诸多代码规则注入到sandbox环境，SYSTEM_PROMPT_GEE_ASSISTANT作为初始的prompt则移除这些细枝末节的规则，重写成长期稳
+定静态和宏观的规则
+3. 继续壮大tools/下的各个工具，将目前散落在各处的geocoding功能和ndvi示例相关功能全部收归tools，且将它做更好的分门别类，如向sandbox提交任务，在前端某处插入图表等等
+4. 为整个系统带来真正的rag能力（目前embedding功能使用hash占位），通过目前已经有的搭建更加完善的知识库和向量检索增强，让rag能够真正服务于orchestrator的输出
+5. 建立聊天记录，模型输出的日志落盘能力，日志罗盘后连接数据库
+
+基于这些迭代目标，目前我觉得存在的问题如下：
+1. 一些第一版遗留的架构中存在和目前迭代方向的架构设计相冲突，例如agents下有一些tool_xx.py的脚本，models/下的类定义也需要核对
+2. 舍弃不必要的api/下的各个路由，从前端设计上只需要着重迭代chat_assistant下的各个功能即可
+3. services杂乱，当前部分功能可能和tool设想的功能重合，services只保留简洁的llm，向量库，数据落盘的功能即可
+你看一下代码，看看除了我上述提到的，照着这个强调react架构的agent系统的设计思路还有哪些重构代码的要点，并整合成一个完整的代码重构todolist

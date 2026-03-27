@@ -1,6 +1,14 @@
-"""GEE 客户端：初始化、底图配置、加载 Asset、NDVI 示例。"""
+"""GEE 客户端：初始化与底图配置。
+
+职责范围：
+  - init_gee_client()    : 初始化 GEE（OAuth2 + project）
+  - get_basemap_config() : 返回前端底图默认参数
+
+具体 GEE 任务（load_simple_asset、run_ndvi_example 等）已迁移至
+backend.app.tools.execution.gee_tasks。
+"""
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from backend.app.core.config import (
     DEFAULT_CENTER_LAT,
@@ -42,75 +50,4 @@ def get_basemap_config() -> Dict[str, Any]:
     }
 
 
-def load_simple_asset(asset_id: str) -> Dict[str, Any]:
-    """
-    加载一个 GEE 官方 Asset（如 USGS/SRTMGL1_003），返回 tile_url 或 layer 配置。
-    未初始化 GEE 时返回占位。
-    """
-    if not init_gee_client():
-        return {
-            "status": "placeholder",
-            "message": "GEE 未初始化，请配置并运行 test_gee_connection.py",
-            "tile_url": None,
-            "asset_id": asset_id,
-        }
-    try:
-        import ee
-        asset = ee.Image(asset_id)
-        # 获取用于 Map 的 tile URL 需要 getMapId
-        vis = {"min": 0, "max": 3000}  # SRTM 高程范围
-        map_id = asset.getMapId(vis)
-        return {
-            "status": "ok",
-            "tile_url": map_id.get("tile_fetcher").url_format if map_id else None,
-            "asset_id": asset_id,
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e), "tile_url": None, "asset_id": asset_id}
-
-
-def run_ndvi_example(
-    bbox: List[float],
-    start_date: str,
-    end_date: str,
-) -> Dict[str, Any]:
-    """
-    在给定 bbox 和日期范围内计算 NDVI 示例（如 MODIS MOD13Q1），返回图层或统计。
-    bbox: [min_lon, min_lat, max_lon, max_lat]
-    """
-    if not init_gee_client():
-        return {
-            "status": "placeholder",
-            "message": "GEE 未初始化",
-            "tile_url": None,
-            "stats": None,
-        }
-    try:
-        import ee
-        roi = ee.Geometry.Rectangle(bbox)
-        # MODIS NDVI 产品
-        col = (
-            ee.ImageCollection("MODIS/006/MOD13Q1")
-            .filterDate(start_date, end_date)
-            .filterBounds(roi)
-            .select("NDVI")
-        )
-        ndvi = col.mean().clip(roi)
-        vis = {"min": 0, "max": 9000, "palette": ["white", "green"]}
-        map_id = ndvi.getMapId(vis)
-        tile_url = map_id.get("tile_fetcher").url_format if map_id else None
-        # 简单统计
-        stat = ndvi.reduceRegion(
-            ee.Reducer.mean(),
-            geometry=roi,
-            scale=250,
-            maxPixels=1e9,
-        )
-        return {
-            "status": "ok",
-            "tile_url": tile_url,
-            "stats": stat.getInfo() if stat else None,
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e), "tile_url": None, "stats": None}
 
