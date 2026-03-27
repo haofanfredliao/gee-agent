@@ -49,17 +49,17 @@ class _MockMap:
                 self.tile_url = url
                 self.layers.append({"name": name or "layer", "tile_url": url})
         except AttributeError:
-            # ee_object 不是 Image（如 FeatureCollection/Feature），用 paint 转换后再取 tile
+            # ee_object 不是 Image（如 FeatureCollection 或 Feature），用 paint 转换后再取 tile。
             try:
                 import ee as _ee
-                # Image.paint 要求 FeatureCollection；若传入 Feature 则先包装
-                if isinstance(ee_object, _ee.Feature):
-                    paintable = _ee.FeatureCollection([ee_object])
-                else:
-                    paintable = ee_object
-                painted = _ee.Image().paint(paintable, 1)
                 paint_vis = vis_params or {"palette": ["FF0000"]}
-                map_id = painted.getMapId(paint_vis)
+                try:
+                    map_id = _ee.Image().paint(ee_object, 1).getMapId(paint_vis)
+                except Exception:
+                    # ee_object 是 Feature，需先包装成 FeatureCollection
+                    map_id = _ee.Image().paint(
+                        _ee.FeatureCollection([ee_object]), 1
+                    ).getMapId(paint_vis)
                 url = map_id.get("tile_fetcher").url_format if map_id else None
                 if url:
                     self.tile_url = url
