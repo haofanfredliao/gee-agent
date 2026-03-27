@@ -42,15 +42,17 @@ PLANNER_PROMPT = """\
   - "asset_id"    : 涉及的 GEE asset 路径（如 "projects/xxx/assets/yyy"），无则填 null
 
 规则：
-1. 若 query 中含有 asset 路径，必须先安排一个 inspect 步骤，再安排 execute 步骤。
-2. 步骤总数控制在 2–4 步，不要过度拆解。
+1. 若 query 中含有 N 个不同的 asset 路径，必须为每一个 asset 单独安排一个 inspect 步骤（共 N 个 inspect），
+   所有 inspect 步骤必须排在所有 execute 步骤之前。
+2. execute 步骤总数控制在 1–3 步，不要过度拆解。总步骤数不超过 N+3。
 3. 只输出 JSON 数组，不要有任何额外说明或 markdown 标记。
-4. 若会话上下文中已有 asset_id 或区域信息，可直接复用，无需重新 inspect。
+4. 若会话上下文中已有对应 asset 的元数据，可直接跳过该 asset 的 inspect。
 
-示例输出：
+示例（两个 asset）：
 [
-  {{"description": "检查矢量数据集属性字段", "type": "inspect", "asset_id": "projects/example/assets/boundary"}},
-  {{"description": "统计区域数量与面积", "type": "execute", "asset_id": "projects/example/assets/boundary"}}
+  {{"description": "检查影像元数据", "type": "inspect", "asset_id": "projects/example/assets/image"}},
+  {{"description": "检查边界属性字段", "type": "inspect", "asset_id": "projects/example/assets/boundary"}},
+  {{"description": "统计各区数量", "type": "execute", "asset_id": "projects/example/assets/image"}}
 ]
 """
 
@@ -64,6 +66,8 @@ CODE_GEN_PROMPT = """\
 {step_description}
 
 {context_section}
+
+{prev_steps_section}
 
 {session_section}
 
@@ -81,6 +85,8 @@ CODE_REPAIR_PROMPT = """\
 {step_description}
 
 {context_section}
+
+{prev_steps_section}
 
 原始代码：
 ```python

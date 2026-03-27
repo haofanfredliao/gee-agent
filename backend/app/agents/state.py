@@ -16,6 +16,7 @@ class StepResult(TypedDict):
     tool: str              # 调用的工具名称
     output: str            # 工具执行后的文本输出（stdout）
     tile_url: Optional[str]  # 若产生了地图图层，记录其 tile URL
+    code: Optional[str]    # gee_executor 步骤最终执行的 Python 代码
     success: bool
 
 

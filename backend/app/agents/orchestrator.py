@@ -56,22 +56,39 @@ def _extract_asset_ids(text: str) -> List[str]:
     return _ASSET_PATH_RE.findall(text)
 
 
-def _build_context_section(context: Dict[str, Any]) -> str:
-    """将 state.context 格式化为 CODE_GEN_PROMPT 中的上下文描述段落。"""
-    parts: List[str] = []
-    if context.get("asset_id"):
-        parts.append(f"Asset ID：{context['asset_id']}")
-    if context.get("property_names"):
-        parts.append(f"属性字段（实际字段名，必须使用这些）：{context['property_names']}")
-    if context.get("feature_count") is not None:
-        parts.append(f"要素总数：{context['feature_count']}")
-    if context.get("geometry_type"):
-        parts.append(f"几何类型：{context['geometry_type']}")
-    if context.get("bands"):
-        parts.append(f"波段列表：{context['bands']}")
-    if not parts:
+def _build_prev_steps_section(steps: List[StepResult]) -> str:
+    """将已完成的 execute 步骤输出格式化为前序结果摘要，注入后续步骤的 prompt。"""
+    execute_steps = [s for s in steps if s["tool"] == "gee_executor" and s["output"]]
+    if not execute_steps:
         return ""
-    return "已知数据上下文（由前序检查步骤获得）：\n" + "\n".join(f"  - {p}" for p in parts)
+    lines = ["【前序执行步骤输出 — 在本步骤代码中可直接使用这些计算结果】"]
+    for s in execute_steps:
+        preview = s["output"][:800]  # 截断过长输出
+        lines.append(f"  步骤 {s['step_index'] + 1}（{s['description']}）的输出：\n{preview}")
+    return "\n\n".join(lines)
+
+
+def _build_context_section(context: Dict[str, Any]) -> str:
+    """将 state.context 格式化为 CODE_GEN_PROMPT 中的上下文描述段落。
+
+    支持多 asset：context["assets"] 是以 asset_id 为 key 的字典，
+    每个 value 包含该 asset 的元数据（property_names/bands/feature_count/geometry_type）。
+    """
+    assets: Dict[str, Any] = context.get("assets") or {}
+    if not assets:
+        return ""
+    lines: List[str] = ["已知数据上下文（由前序 inspect 步骤获得，必须使用这些实际字段名）："]
+    for aid, meta in assets.items():
+        lines.append(f"  Asset: {aid}")
+        if meta.get("bands"):
+            lines.append(f"    - 波段列表：{meta['bands']}")
+        if meta.get("property_names"):
+            lines.append(f"    - 属性字段（实际字段名）：{meta['property_names']}")
+        if meta.get("feature_count") is not None:
+            lines.append(f"    - 要素总数：{meta['feature_count']}")
+        if meta.get("geometry_type"):
+            lines.append(f"    - 几何类型：{meta['geometry_type']}")
+    return "\n".join(lines)
 
 
 def _build_session_section(state: WorkflowState) -> str:
@@ -125,21 +142,22 @@ async def _plan(state: WorkflowState) -> WorkflowState:
     except (json.JSONDecodeError, ValueError):
         plan = []
 
-    # 回退：按 query 中的 asset 路径自动生成默认两步计划
+    # 回退：按 query 中的 asset 路径自动生成默认计划（每个 asset 各一个 inspect）
     if not plan:
         asset_ids = _extract_asset_ids(state["query"])
-        if asset_ids:
+        # 去重同时保持顺序
+        seen: Dict[str, bool] = {}
+        unique_asset_ids = [a for a in asset_ids if not seen.setdefault(a, False) and not seen.update({a: True})]
+        if unique_asset_ids:
             plan = [
+                {"description": f"检查 {a.split('/')[-1]} 元数据", "type": "inspect", "asset_id": a}
+                for a in unique_asset_ids
+            ] + [
                 {
-                    "description": "检查数据集属性字段与元数据",
-                    "type": "inspect",
-                    "asset_id": asset_ids[0],
-                },
-                {
-                    "description": "加载数据、执行分析并可视化",
+                    "description": "执行分析并可视化",
                     "type": "execute",
-                    "asset_id": asset_ids[0],
-                },
+                    "asset_id": unique_asset_ids[0],
+                }
             ]
         else:
             plan = [
@@ -178,6 +196,7 @@ async def _execute_step(
         "tool": "",
         "output": "",
         "tile_url": None,
+        "code": None,
         "success": False,
     }
 
@@ -189,12 +208,15 @@ async def _execute_step(
             result["output"] = json.dumps(info, ensure_ascii=False, indent=2)
             result["success"] = info["status"] == "ok"
             if info["status"] == "ok":
-                # 写入跨步骤共享 context
-                state["context"]["asset_id"] = asset_id
-                state["context"]["property_names"] = info.get("property_names", [])
-                state["context"]["feature_count"] = info.get("feature_count")
-                state["context"]["geometry_type"] = info.get("geometry_type")
-                state["context"]["bands"] = info.get("bands", [])
+                # 写入跨步骤共享 context（多 asset 结构）
+                if "assets" not in state["context"]:
+                    state["context"]["assets"] = {}
+                state["context"]["assets"][asset_id] = {
+                    "property_names": info.get("property_names", []),
+                    "feature_count": info.get("feature_count"),
+                    "geometry_type": info.get("geometry_type"),
+                    "bands": info.get("bands", []),
+                }
         else:
             result["output"] = "未提供 asset_id，跳过检查。"
             result["success"] = False
@@ -203,13 +225,15 @@ async def _execute_step(
     elif step_type == "execute":
         result["tool"] = "gee_executor"
 
-        # Think：LLM 生成代码，注入从 inspect 步骤获得的 context 和 session context
+        # Think：LLM 生成代码，注入从 inspect 步骤获得的 context、前序步骤输出和 session context
         context_section = _build_context_section(state["context"])
+        prev_steps_section = _build_prev_steps_section(state["steps"])
         session_section = _build_session_section(state)
         code_prompt = CODE_GEN_PROMPT.format(
             query=state["query"],
             step_description=description,
             context_section=context_section,
+            prev_steps_section=prev_steps_section,
             session_section=session_section,
         )
         llm_response = await llm_client.chat_with_llm(code_prompt)
@@ -236,6 +260,7 @@ async def _execute_step(
                         query=state["query"],
                         step_description=description,
                         context_section=context_section,
+                        prev_steps_section=prev_steps_section,
                         original_code=code,
                         error_log=error_log,
                         attempt=attempt,
@@ -251,6 +276,7 @@ async def _execute_step(
 
             result["output"] = exec_result.get("log", "")
             result["tile_url"] = exec_result.get("tile_url")
+            result["code"] = code
             result["success"] = exec_result["status"] == "ok"
 
             # 更新地图 state：优先使用 session 中已知的地图中心
@@ -446,6 +472,7 @@ async def run_workflow(
                 "tool": s["tool"],
                 "success": s["success"],
                 "output_preview": (s["output"] or "")[:300],
+                "code": s.get("code") or "",
             }
             for s in state["steps"]
         ],
@@ -561,6 +588,7 @@ async def stream_workflow(
                 "tool": done_result["tool"],
                 "success": done_result["success"],
                 "output_preview": (done_result["output"] or "")[:300],
+                "code": done_result.get("code") or "",
             })
 
         # ── 4. summarizing ────────────────────────────────────────────────
@@ -603,6 +631,7 @@ async def stream_workflow(
                         "tool": s["tool"],
                         "success": s["success"],
                         "output_preview": (s["output"] or "")[:300],
+                        "code": s.get("code") or "",
                     }
                     for s in state["steps"]
                 ],

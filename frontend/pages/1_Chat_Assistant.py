@@ -46,6 +46,10 @@ def _render_assistant_message(msg: dict) -> None:
                 preview = (s.get("output_preview") or "").strip()
                 if preview:
                     st.code(preview, language=None)
+                code = (s.get("code") or "").strip()
+                if code and s.get("tool") == "gee_executor":
+                    with st.expander("🔍 查看生成代码", expanded=False):
+                        st.code(code, language="python")
     st.markdown(msg["content"])
 
 # ── Session state 初始化 ───────────────────────────────────────────────────────
@@ -162,9 +166,13 @@ with st.sidebar:
                                     ok   = edata.get("success", False)
                                     icon = "✅" if ok else "❌"
                                     preview = (edata.get("output_preview") or "").strip()
+                                    code = (edata.get("code") or "").strip()
                                     st.write(f"{icon} **步骤 {idx+1}**：{desc}  `{tool}`")
                                     if preview:
                                         st.code(preview, language=None)
+                                    if code and tool == "gee_executor":
+                                        with st.expander("🔍 查看生成代码", expanded=False):
+                                            st.code(code, language="python")
                                     collected_steps.append(edata)
 
                                 elif etype == "summarizing":
