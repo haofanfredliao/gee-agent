@@ -24,6 +24,7 @@ async def chat(request: ChatRequest):
     response = await run_workflow(
         query=request.message,
         session_id=request.session_id or "",
+        map_context=request.map_context.model_dump(exclude_none=True) if request.map_context else None,
     )
     return response
 
@@ -38,6 +39,7 @@ async def chat_stream(request: ChatRequest):
         stream_workflow(
             query=request.message,
             session_id=request.session_id or "",
+            map_context=request.map_context.model_dump(exclude_none=True) if request.map_context else None,
         ),
         media_type="application/x-ndjson",
     )

@@ -1,12 +1,12 @@
 # GEE Geo 助手 Demo（MVP）
 
-基于 PRD 搭建的 GEE + LangChain + FastAPI + Streamlit + Chroma 的 Geo 助手最小可用版本。
+基于 PRD 演进的 GEE + FastAPI + Streamlit + Chroma 的 Geo 助手原型。
 
 ## 功能概览
 
 - **Chat Assistant**：自然语言与 GEE 助手对话，可问概念、要代码、说地名定位并更新地图。
 - **Map Explorer**：输入地名定位地图，可选加载 GEE 图层。
-- **后端 API**：`/chat`、`/geo/resolve`、`/gee/run`、`/gee/basemap`、`/health`。
+- **后端 API**：`/chat`、`/chat/stream`、`/chat/basemap`、`/health`。
 
 ## 目录结构
 
@@ -14,12 +14,12 @@
 gee-agent/
 ├── backend/app/          # FastAPI 应用
 │   ├── main.py
-│   ├── api/              # routes_chat, routes_geo, routes_gee
+│   ├── api/              # routes_chat
 │   ├── core/             # config
-│   ├── models/           # chat, geo, gee
+│   ├── models/           # chat
 │   ├── services/         # llm_client, embeddings, chroma_store, geocoding, gee_client
-│   ├── rag/              # prompts, retriever, chains
-│   └── agents/           # tools_geo, tools_gee, tools_kb, agent_gee_assistant
+│   ├── rag/              # (预留) 知识库相关模块
+│   └── agents/           # orchestrator, router, state, prompts
 ├── frontend/
 │   ├── app.py            # Streamlit 入口
 │   ├── pages/            # 1_Chat_Assistant.py, 2_Map_Explorer.py
@@ -84,7 +84,7 @@ PYTHONPATH=. streamlit run frontend/app.py
 ## 依赖说明
 
 - **Poe API**：未配置 `POE_API_KEY` 时，聊天为占位回复。
-- **GEE**：未安装或未认证时，`load_asset` / `ndvi_example` 返回占位或错误信息。
+- **GEE**：未安装或未认证时，执行步骤返回占位或错误信息。
 - **Chroma**：需 `chromadb`，首次运行前执行 `build_chroma_index.py`。
 
 可选 `requirements.txt`（与 pyproject.toml 对齐）：

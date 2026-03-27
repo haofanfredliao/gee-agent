@@ -1,4 +1,4 @@
-"""FastAPI 应用入口：健康检查 + 挂载 /chat、/geo、/gee。"""
+"""FastAPI 应用入口：健康检查 + 挂载 /chat。"""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

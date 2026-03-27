@@ -26,6 +26,7 @@ import re
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from backend.app.agents.state import WorkflowState, StepResult, make_initial_state, format_status
+from backend.app.agents.session_store import load_session_context, save_session_state
 from backend.app.agents.router import classify_intent
 from backend.app.tools.explanation.asset_inspector import inspect_asset
 from backend.app.tools.explanation.kb_lookup import knowledge_base_lookup
@@ -267,7 +268,11 @@ async def _answer_knowledge(query: str) -> str:
 
 # ─── 主入口 ──────────────────────────────────────────────────────────────────
 
-async def run_workflow(query: str, session_id: str = "") -> ChatResponse:
+async def run_workflow(
+    query: str,
+    session_id: str = "",
+    map_context: Optional[Dict[str, Any]] = None,
+) -> ChatResponse:
     """
     工作流主入口：路由 → 规划 → 执行 → 汇总 → 返回 ChatResponse。
 
@@ -275,6 +280,8 @@ async def run_workflow(query: str, session_id: str = "") -> ChatResponse:
     可在前端聊天界面通过 status() 展示各步骤进度。
     """
     state = make_initial_state(query, session_id)
+    state["session_context"] = load_session_context(session_id)
+    state["context"].update(state["session_context"])
 
     # ── 1. routing ────────────────────────────────────────────────────────
     state["status"] = "routing"
@@ -283,6 +290,13 @@ async def run_workflow(query: str, session_id: str = "") -> ChatResponse:
     # 知识问答：走检索增强的单步回答，不进入多步执行工作流
     if state["intent"] == "knowledge":
         reply = await _answer_knowledge(query)
+        save_session_state(
+            session_id,
+            context_updates=state["context"],
+            map_context=map_context,
+            last_query=query,
+            last_reply=reply,
+        )
         return ChatResponse(
             reply=reply,
             workflow_status=WorkflowStatus(
@@ -335,6 +349,21 @@ async def run_workflow(query: str, session_id: str = "") -> ChatResponse:
         ],
     )
 
+    resolved_map_context = map_context or {}
+    if map_update:
+        resolved_map_context = {
+            "center_lat": map_update.center_lat,
+            "center_lon": map_update.center_lon,
+            "zoom": map_update.zoom,
+        }
+    save_session_state(
+        session_id,
+        context_updates=state["context"],
+        map_context=resolved_map_context,
+        last_query=query,
+        last_reply=state["final_reply"],
+    )
+
     return ChatResponse(
         reply=state["final_reply"] or "工作流执行完成，但未生成汇总。",
         map_update=map_update,
@@ -349,7 +378,11 @@ def _evt(event_type: str, data: Any) -> str:
     return json.dumps({"type": event_type, "data": data}, ensure_ascii=False) + "\n"
 
 
-async def stream_workflow(query: str, session_id: str = "") -> AsyncGenerator[str, None]:
+async def stream_workflow(
+    query: str,
+    session_id: str = "",
+    map_context: Optional[Dict[str, Any]] = None,
+) -> AsyncGenerator[str, None]:
     """
     工作流流式入口：与 run_workflow 逻辑相同，但每个关键节点都立即 yield 一个事件，
     而不是等到全部完成后一次性返回。
@@ -357,6 +390,8 @@ async def stream_workflow(query: str, session_id: str = "") -> AsyncGenerator[st
     前端通过 httpx 流式接收，实时更新 st.status。
     """
     state = make_initial_state(query, session_id)
+    state["session_context"] = load_session_context(session_id)
+    state["context"].update(state["session_context"])
     try:
         # ── 1. routing ────────────────────────────────────────────────────
         state["status"] = "routing"
@@ -367,6 +402,13 @@ async def stream_workflow(query: str, session_id: str = "") -> AsyncGenerator[st
         if state["intent"] == "knowledge":
             yield _evt("summarizing", {})
             reply = await _answer_knowledge(query)
+            save_session_state(
+                session_id,
+                context_updates=state["context"],
+                map_context=map_context,
+                last_query=query,
+                last_reply=reply,
+            )
             yield _evt("done", {"reply": reply, "map_update": None})
             return
 
@@ -405,6 +447,20 @@ async def stream_workflow(query: str, session_id: str = "") -> AsyncGenerator[st
 
         # ── 5. 构建 done 事件 ─────────────────────────────────────────────
         map_update_dict = state.get("map_update")
+        resolved_map_context = map_context or {}
+        if map_update_dict:
+            resolved_map_context = {
+                "center_lat": map_update_dict.get("center_lat"),
+                "center_lon": map_update_dict.get("center_lon"),
+                "zoom": map_update_dict.get("zoom"),
+            }
+        save_session_state(
+            session_id,
+            context_updates=state["context"],
+            map_context=resolved_map_context,
+            last_query=query,
+            last_reply=state["final_reply"],
+        )
         yield _evt("done", {
             "reply": state["final_reply"] or "工作流执行完成，但未生成汇总。",
             "map_update": map_update_dict,

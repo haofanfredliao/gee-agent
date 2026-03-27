@@ -1,6 +1,6 @@
 """GEE 客户端：初始化、底图配置、加载 Asset、NDVI 示例。"""
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from backend.app.core.config import (
     DEFAULT_CENTER_LAT,
@@ -114,40 +114,3 @@ def run_ndvi_example(
     except Exception as e:
         return {"status": "error", "message": str(e), "tile_url": None, "stats": None}
 
-def execute_gee_code_simple(code: str) -> Dict[str, Any]:
-    """执行包含 GEE API 调用的 Python 代码并返回输出及图层 URL。"""
-    if not init_gee_client():
-        return {"status": "error", "log": "GEE 未初始化", "tile_url": None}
-    
-    import io
-    import sys
-    import ee
-    
-    class MockMap:
-        def __init__(self):
-            self.tile_url = None
-        def addLayer(self, ee_object, vis_params=None, name=None, shown=True, opacity=1):
-            try:
-                map_id = ee_object.getMapId(vis_params or {})
-                self.tile_url = map_id.get("tile_fetcher").url_format if map_id else None
-            except Exception as e:
-                print(f"Error adding layer: {e}")
-        def centerObject(self, ee_object, zoom=None):
-            pass  # 前端由 map_update 控制中心点，此处忽略
-        def setCenter(self, lon, lat, zoom=None):
-            pass  # 同上
-                
-    m = MockMap()
-    old_stdout = sys.stdout
-    sys.stdout = captured_stdout = io.StringIO()
-    
-    local_env = {"ee": ee, "Map": m, "print": print}
-    
-    try:
-        exec(code, local_env, local_env)
-        stdout_str = captured_stdout.getvalue()
-        return {"status": "ok", "log": stdout_str, "tile_url": m.tile_url}
-    except Exception as e:
-        return {"status": "error", "log": captured_stdout.getvalue() + f"\nError: {e}", "tile_url": None}
-    finally:
-        sys.stdout = old_stdout
