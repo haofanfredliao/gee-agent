@@ -1,7 +1,7 @@
 import sys
 import os
 sys.path.append(os.getcwd())
-from backend.app.services.gee_client import execute_gee_code_simple
+from backend.app.tools.execution.gee_executor import execute_gee_snippet
 
 code = """
 import ee
@@ -12,5 +12,5 @@ print("Total districts:", fc.size().getInfo())
 bounds = fc.geometry().bounds()
 Map.addLayer(fc, {"color": "red"})
 """
-res = execute_gee_code_simple(code)
+res = execute_gee_snippet(code)
 print("Result ->", res)

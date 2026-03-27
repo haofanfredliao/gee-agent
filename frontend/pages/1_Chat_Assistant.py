@@ -25,7 +25,8 @@ st.markdown(
 )
 
 from frontend.components.map_view import render_map
-from frontend.services.api_client import chat_stream, get_basemap_config
+from frontend.services.api_client import chat_stream, get_basemap_config, save_history
+import uuid
 
 
 def _render_assistant_message(msg: dict) -> None:
@@ -45,6 +46,10 @@ def _render_assistant_message(msg: dict) -> None:
                 preview = (s.get("output_preview") or "").strip()
                 if preview:
                     st.code(preview, language=None)
+                code = (s.get("code") or "").strip()
+                if code and s.get("tool") == "gee_executor":
+                    with st.expander("🔍 查看生成代码", expanded=False):
+                        st.code(code, language="python")
     st.markdown(msg["content"])
 
 # ── Session state 初始化 ───────────────────────────────────────────────────────
@@ -60,6 +65,7 @@ _init("map_zoom",       config.get("zoom", 10))
 _init("map_layers",     [])
 _init("messages",       [])
 _init("history",        [])
+_init("session_id",     str(uuid.uuid4()))
 
 
 def _apply_map_update(update: dict) -> None:
@@ -81,6 +87,8 @@ def _save_to_history():
         "新对话",
     )
     st.session_state["history"].insert(0, {"title": title, "messages": msgs.copy()})
+    # 持久化到后端（静默失败，不阻断 UI）
+    save_history(st.session_state["session_id"], msgs)
     st.session_state["messages"] = []
     st.session_state["map_layers"] = []
 
@@ -110,7 +118,7 @@ with st.sidebar:
             # ── 流式接收并实时渲染工作流进度 ──────────────────────────────
             collected_steps: list = []
             final_resp: dict = {}
-
+            plan_total: int = 0  # 用于显示当前步骤进度
             with messages_container:
                 with st.chat_message("assistant"):
                     status_placeholder = st.empty()
@@ -121,6 +129,7 @@ with st.sidebar:
                         with status_placeholder.status("🔄 工作流执行中…", expanded=True) as wf_status:
                             for evt in chat_stream(
                                 prompt,
+                                session_id=st.session_state["session_id"],
                                 map_context={
                                     "center_lat": st.session_state["map_center_lat"],
                                     "center_lon": st.session_state["map_center_lon"],
@@ -137,7 +146,8 @@ with st.sidebar:
 
                                 elif etype == "planning":
                                     plan = edata.get("plan", [])
-                                    st.write(f"📋 任务规划（共 {len(plan)} 步）：")
+                                    plan_total = len(plan)  # 缓存总步数供后续显示
+                                    st.write(f"📋 任务规划（共 {plan_total} 步）：")
                                     for i, s in enumerate(plan):
                                         st.write(f"  ⬜ 步骤 {i+1}：{s.get('description','')}")
 
@@ -145,7 +155,8 @@ with st.sidebar:
                                     idx = edata.get("index", 0)
                                     desc = edata.get("description", "")
                                     tool = edata.get("tool", "")
-                                    wf_status.update(label=f"⏳ 步骤 {idx+1}/{len(collected_steps)+1}：{desc}")
+                                    total_label = f"/{plan_total}" if plan_total else ""
+                                    wf_status.update(label=f"⏳ 步骤 {idx+1}{total_label}：{desc}")
                                     st.write(f"⏳ **步骤 {idx+1}**：{desc}  `{tool}`")
 
                                 elif etype == "step_done":
@@ -155,9 +166,13 @@ with st.sidebar:
                                     ok   = edata.get("success", False)
                                     icon = "✅" if ok else "❌"
                                     preview = (edata.get("output_preview") or "").strip()
+                                    code = (edata.get("code") or "").strip()
                                     st.write(f"{icon} **步骤 {idx+1}**：{desc}  `{tool}`")
                                     if preview:
                                         st.code(preview, language=None)
+                                    if code and tool == "gee_executor":
+                                        with st.expander("🔍 查看生成代码", expanded=False):
+                                            st.code(code, language="python")
                                     collected_steps.append(edata)
 
                                 elif etype == "summarizing":

@@ -35,8 +35,9 @@ def _collection():
 
 
 def add_documents(docs: List[str], metadatas: Optional[List[dict]] = None) -> None:
-    """将文档加入向量库。"""
+    """将文档加入向量库（使用 sentence-transformers 显式计算 embedding）。"""
     import uuid
+    from backend.app.services.embeddings import get_embeddings
     coll = _collection()
     if coll is None:
         raise RuntimeError("chromadb 未安装，请 pip install chromadb")
@@ -44,7 +45,8 @@ def add_documents(docs: List[str], metadatas: Optional[List[dict]] = None) -> No
     if len(metadatas) != len(docs):
         metadatas = [{}] * len(docs)
     ids = [f"doc_{uuid.uuid4().hex[:12]}" for _ in range(len(docs))]
-    coll.add(documents=docs, metadatas=metadatas, ids=ids)
+    embeddings = get_embeddings(docs)
+    coll.add(documents=docs, metadatas=metadatas, ids=ids, embeddings=embeddings)
 
 
 def similarity_search(query: str, k: int = 3) -> List[Dict[str, Any]]:

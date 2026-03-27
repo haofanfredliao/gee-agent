@@ -67,3 +67,6 @@ def _gee_settings() -> dict:
 
 
 GEE_PROJECT_ID: Optional[str] = os.environ.get("GEE_PROJECT_ID") or _gee_settings().get("project_id")
+
+# CORS：允许的来源列表。生产环境应在 configs/settings.yaml 的 security.allowed_origins 中配置具体域名。
+ALLOWED_ORIGINS: list = get_setting("security", {}).get("allowed_origins") or ["*"]

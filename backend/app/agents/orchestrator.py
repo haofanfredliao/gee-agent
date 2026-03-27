@@ -23,16 +23,27 @@
 """
 import json
 import re
+import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from backend.app.agents.state import WorkflowState, StepResult, make_initial_state, format_status
+from backend.app.agents.session_store import load_session_context, save_session_state
 from backend.app.agents.router import classify_intent
 from backend.app.tools.explanation.asset_inspector import inspect_asset
 from backend.app.tools.explanation.kb_lookup import knowledge_base_lookup
 from backend.app.tools.execution.gee_executor import execute_gee_snippet
+from backend.app.tools.geo.geocoder import resolve_place
+from backend.app.agents.prompts import (
+    PLANNER_PROMPT,
+    CODE_GEN_PROMPT,
+    CODE_REPAIR_PROMPT,
+    SUMMARIZE_PROMPT,
+    KNOWLEDGE_PROMPT,
+    GEO_REPLY_PROMPT,
+)
 from backend.app.models.chat import ChatResponse, MapUpdate, WorkflowStatus
 from backend.app.services import llm_client
-from backend.app.rag.prompts import PLANNER_PROMPT, CODE_GEN_PROMPT, SUMMARIZE_PROMPT
+from backend.app.services.log_store import write_log
 from backend.app.core.config import DEFAULT_CENTER_LAT, DEFAULT_CENTER_LON, DEFAULT_ZOOM
 
 # ─── 辅助函数 ────────────────────────────────────────────────────────────────
@@ -45,22 +56,67 @@ def _extract_asset_ids(text: str) -> List[str]:
     return _ASSET_PATH_RE.findall(text)
 
 
+def _build_prev_steps_section(steps: List[StepResult]) -> str:
+    """将已完成的 execute 步骤输出格式化为前序结果摘要，注入后续步骤的 prompt。"""
+    execute_steps = [s for s in steps if s["tool"] == "gee_executor" and s["output"]]
+    if not execute_steps:
+        return ""
+    lines = ["【前序执行步骤输出 — 在本步骤代码中可直接使用这些计算结果】"]
+    for s in execute_steps:
+        preview = s["output"][:800]  # 截断过长输出
+        lines.append(f"  步骤 {s['step_index'] + 1}（{s['description']}）的输出：\n{preview}")
+    return "\n\n".join(lines)
+
+
 def _build_context_section(context: Dict[str, Any]) -> str:
-    """将 state.context 格式化为 CODE_GEN_PROMPT 中的上下文描述段落。"""
+    """将 state.context 格式化为 CODE_GEN_PROMPT 中的上下文描述段落。
+
+    支持多 asset：context["assets"] 是以 asset_id 为 key 的字典，
+    每个 value 包含该 asset 的元数据（property_names/bands/feature_count/geometry_type）。
+    """
+    assets: Dict[str, Any] = context.get("assets") or {}
+    if not assets:
+        return ""
+    lines: List[str] = ["已知数据上下文（由前序 inspect 步骤获得，必须使用这些实际字段名）："]
+    for aid, meta in assets.items():
+        lines.append(f"  Asset: {aid}")
+        if meta.get("bands"):
+            lines.append(f"    - 波段列表：{meta['bands']}")
+        if meta.get("property_names"):
+            lines.append(f"    - 属性字段（实际字段名）：{meta['property_names']}")
+        if meta.get("feature_count") is not None:
+            lines.append(f"    - 要素总数：{meta['feature_count']}")
+        if meta.get("geometry_type"):
+            lines.append(f"    - 几何类型：{meta['geometry_type']}")
+    return "\n".join(lines)
+
+
+def _build_session_section(state: WorkflowState) -> str:
+    """将 session 级别上下文格式化为 prompt 中的对话历史/区域感知段落。"""
     parts: List[str] = []
-    if context.get("asset_id"):
-        parts.append(f"Asset ID：{context['asset_id']}")
-    if context.get("property_names"):
-        parts.append(f"属性字段（实际字段名，必须使用这些）：{context['property_names']}")
-    if context.get("feature_count") is not None:
-        parts.append(f"要素总数：{context['feature_count']}")
-    if context.get("geometry_type"):
-        parts.append(f"几何类型：{context['geometry_type']}")
-    if context.get("bands"):
-        parts.append(f"波段列表：{context['bands']}")
+    sc = state.get("session_context") or {}
+
+    map_ctx = sc.get("map_context") or {}
+    if map_ctx.get("center_lat") and map_ctx.get("center_lon"):
+        parts.append(
+            f"当前地图区域：中心 ({map_ctx['center_lat']:.5f}, {map_ctx['center_lon']:.5f})，"
+            f"缩放级别 {map_ctx.get('zoom', '未知')}"
+        )
+
+    last_q = sc.get("last_query")
+    last_r = sc.get("last_reply")
+    if last_q:
+        parts.append(f"上一轮用户请求：{last_q[:120]}")
+    if last_r:
+        parts.append(f"上一轮助手回复摘要：{last_r[:200]}")
+
+    asset_id = sc.get("asset_id")
+    if asset_id:
+        parts.append(f"上一轮使用的 Asset：{asset_id}")
+
     if not parts:
         return ""
-    return "已知数据上下文（由前序检查步骤获得）：\n" + "\n".join(f"  - {p}" for p in parts)
+    return "\n".join(["【会话上下文 — 可复用以下信息】"] + [f"  - {p}" for p in parts])
 
 
 # ─── 规划阶段 ────────────────────────────────────────────────────────────────
@@ -73,7 +129,10 @@ async def _plan(state: WorkflowState) -> WorkflowState:
     若解析失败，则根据 query 中是否含有 asset 路径生成默认计划。
     """
     state["status"] = "planning"
-    raw = await llm_client.chat_with_llm(PLANNER_PROMPT.format(query=state["query"]))
+    session_section = _build_session_section(state)
+    raw = await llm_client.chat_with_llm(
+        PLANNER_PROMPT.format(query=state["query"], session_section=session_section)
+    )
 
     plan: List[Dict[str, Any]] = []
     try:
@@ -83,21 +142,22 @@ async def _plan(state: WorkflowState) -> WorkflowState:
     except (json.JSONDecodeError, ValueError):
         plan = []
 
-    # 回退：按 query 中的 asset 路径自动生成默认两步计划
+    # 回退：按 query 中的 asset 路径自动生成默认计划（每个 asset 各一个 inspect）
     if not plan:
         asset_ids = _extract_asset_ids(state["query"])
-        if asset_ids:
+        # 去重同时保持顺序
+        seen: Dict[str, bool] = {}
+        unique_asset_ids = [a for a in asset_ids if not seen.setdefault(a, False) and not seen.update({a: True})]
+        if unique_asset_ids:
             plan = [
+                {"description": f"检查 {a.split('/')[-1]} 元数据", "type": "inspect", "asset_id": a}
+                for a in unique_asset_ids
+            ] + [
                 {
-                    "description": "检查数据集属性字段与元数据",
-                    "type": "inspect",
-                    "asset_id": asset_ids[0],
-                },
-                {
-                    "description": "加载数据、执行分析并可视化",
+                    "description": "执行分析并可视化",
                     "type": "execute",
-                    "asset_id": asset_ids[0],
-                },
+                    "asset_id": unique_asset_ids[0],
+                }
             ]
         else:
             plan = [
@@ -136,6 +196,7 @@ async def _execute_step(
         "tool": "",
         "output": "",
         "tile_url": None,
+        "code": None,
         "success": False,
     }
 
@@ -147,12 +208,15 @@ async def _execute_step(
             result["output"] = json.dumps(info, ensure_ascii=False, indent=2)
             result["success"] = info["status"] == "ok"
             if info["status"] == "ok":
-                # 写入跨步骤共享 context
-                state["context"]["asset_id"] = asset_id
-                state["context"]["property_names"] = info.get("property_names", [])
-                state["context"]["feature_count"] = info.get("feature_count")
-                state["context"]["geometry_type"] = info.get("geometry_type")
-                state["context"]["bands"] = info.get("bands", [])
+                # 写入跨步骤共享 context（多 asset 结构）
+                if "assets" not in state["context"]:
+                    state["context"]["assets"] = {}
+                state["context"]["assets"][asset_id] = {
+                    "property_names": info.get("property_names", []),
+                    "feature_count": info.get("feature_count"),
+                    "geometry_type": info.get("geometry_type"),
+                    "bands": info.get("bands", []),
+                }
         else:
             result["output"] = "未提供 asset_id，跳过检查。"
             result["success"] = False
@@ -161,12 +225,16 @@ async def _execute_step(
     elif step_type == "execute":
         result["tool"] = "gee_executor"
 
-        # Think：LLM 生成代码，注入从 inspect 步骤获得的 context
+        # Think：LLM 生成代码，注入从 inspect 步骤获得的 context、前序步骤输出和 session context
         context_section = _build_context_section(state["context"])
+        prev_steps_section = _build_prev_steps_section(state["steps"])
+        session_section = _build_session_section(state)
         code_prompt = CODE_GEN_PROMPT.format(
             query=state["query"],
             step_description=description,
             context_section=context_section,
+            prev_steps_section=prev_steps_section,
+            session_section=session_section,
         )
         llm_response = await llm_client.chat_with_llm(code_prompt)
 
@@ -181,19 +249,42 @@ async def _execute_step(
         else:
             code = code_blocks[-1].strip()
 
-            # Act：执行代码
+            # Act：执行代码（含 repair 子循环，最多重试 3 次）
+            MAX_REPAIR_ATTEMPTS = 3
             exec_result = execute_gee_snippet(code)
+            for attempt in range(1, MAX_REPAIR_ATTEMPTS + 1):
+                if exec_result["status"] == "ok":
+                    break
+                error_log = exec_result.get("log", "")
+                repair_prompt = CODE_REPAIR_PROMPT.format(
+                        query=state["query"],
+                        step_description=description,
+                        context_section=context_section,
+                        prev_steps_section=prev_steps_section,
+                        original_code=code,
+                        error_log=error_log,
+                        attempt=attempt,
+                    )
+                repair_response = await llm_client.chat_with_llm(repair_prompt)
+                repaired_blocks = re.findall(r"```python(.*?)```", repair_response, re.DOTALL)
+                if not repaired_blocks:
+                    repaired_blocks = re.findall(r"```(.*?)```", repair_response, re.DOTALL)
+                if not repaired_blocks:
+                    break
+                code = repaired_blocks[-1].strip()
+                exec_result = execute_gee_snippet(code)
+
             result["output"] = exec_result.get("log", "")
             result["tile_url"] = exec_result.get("tile_url")
+            result["code"] = code
             result["success"] = exec_result["status"] == "ok"
 
-            # 更新地图 state
+            # 更新地图 state：优先使用 session 中已知的地图中心
             if exec_result.get("tile_url"):
-                q = state["query"].lower()
-                if "hong" in q or "香港" in q or "hk" in q:
-                    center_lat, center_lon, zoom = 22.312, 114.174, 10
-                else:
-                    center_lat, center_lon, zoom = DEFAULT_CENTER_LAT, DEFAULT_CENTER_LON, DEFAULT_ZOOM
+                map_ctx = (state.get("session_context") or {}).get("map_context") or {}
+                center_lat = map_ctx.get("center_lat") or DEFAULT_CENTER_LAT
+                center_lon = map_ctx.get("center_lon") or DEFAULT_CENTER_LON
+                zoom = map_ctx.get("zoom") or DEFAULT_ZOOM
                 state["map_update"] = {
                     "center_lat": center_lat,
                     "center_lon": center_lon,
@@ -227,9 +318,67 @@ async def _summarize(state: WorkflowState) -> WorkflowState:
     return state
 
 
+async def _answer_knowledge(query: str) -> str:
+    """知识问答：先检索知识库，再基于检索结果调用 LLM。"""
+    kb_context = knowledge_base_lookup(query, k=4)
+    prompt = KNOWLEDGE_PROMPT.format(
+        query=query,
+        kb_context=kb_context,
+    )
+    return await llm_client.chat_with_llm(prompt)
+
+
+async def _handle_geo_query(
+    query: str,
+    session_id: str,
+    existing_map_context: Optional[Dict[str, Any]],
+) -> tuple[Optional[MapUpdate], str]:
+    """地名定位分支：调用 geocoder tool，生成 map_update 和自然语言回复。
+
+    Returns (map_update, reply_text)
+    """
+    # 从 query 中简单提取地名（取最后一个中/英名词段）
+    place = query.strip()
+    geo = resolve_place(place)
+    if geo["status"] != "ok":
+        reply = f"抱歉，无法定位「{place}」，请检查地名是否正确。"
+        return None, reply
+
+    map_update = MapUpdate(
+        center_lat=geo["center_lat"],
+        center_lon=geo["center_lon"],
+        zoom=geo["zoom"],
+        layer_info=None,
+    )
+    new_map_ctx = {
+        "center_lat": geo["center_lat"],
+        "center_lon": geo["center_lon"],
+        "zoom": geo["zoom"],
+    }
+    save_session_state(
+        session_id,
+        map_context=new_map_ctx,
+        last_query=query,
+    )
+
+    reply = await llm_client.chat_with_llm(
+        GEO_REPLY_PROMPT.format(
+            place_name=geo["place_name"],
+            center_lat=geo["center_lat"],
+            center_lon=geo["center_lon"],
+            bbox=geo["bbox"],
+        )
+    )
+    return map_update, reply
+
+
 # ─── 主入口 ──────────────────────────────────────────────────────────────────
 
-async def run_workflow(query: str, session_id: str = "") -> ChatResponse:
+async def run_workflow(
+    query: str,
+    session_id: str = "",
+    map_context: Optional[Dict[str, Any]] = None,
+) -> ChatResponse:
     """
     工作流主入口：路由 → 规划 → 执行 → 汇总 → 返回 ChatResponse。
 
@@ -237,21 +386,51 @@ async def run_workflow(query: str, session_id: str = "") -> ChatResponse:
     可在前端聊天界面通过 status() 展示各步骤进度。
     """
     state = make_initial_state(query, session_id)
+    state["session_context"] = load_session_context(session_id)
+    state["context"].update(state["session_context"])
+    _t0 = time.monotonic()
 
     # ── 1. routing ────────────────────────────────────────────────────────
     state["status"] = "routing"
     state["intent"] = await classify_intent(query)
 
-    # 知识问答直接走 RAG，不走多步工作流
+    # 知识问答：走检索增强的单步回答，不进入多步执行工作流
     if state["intent"] == "knowledge":
-        from backend.app.rag.chains import run_rag
-        reply = await run_rag(query)
+        reply = await _answer_knowledge(query)
+        save_session_state(
+            session_id,
+            context_updates=state["context"],
+            map_context=map_context,
+            last_query=query,
+            last_reply=reply,
+        )
+        write_log(session_id, intent="knowledge", query=query, plan_steps=1,
+                  reply_preview=reply, duration_ms=int((time.monotonic()-_t0)*1000))
         return ChatResponse(
             reply=reply,
             workflow_status=WorkflowStatus(
                 intent="knowledge",
                 status="terminated",
-                plan=["知识库检索与直接问答"],
+                plan=["知识库检索与问答"],
+                steps_completed=1,
+                steps_total=1,
+                steps=[],
+            ),
+        )
+
+    # 地名定位：直接调用 geocoder tool
+    if state["intent"] == "geo_query":
+        map_update, reply = await _handle_geo_query(query, session_id, map_context)
+        save_session_state(session_id, last_reply=reply)
+        write_log(session_id, intent="geo_query", query=query, plan_steps=1,
+                  reply_preview=reply, duration_ms=int((time.monotonic()-_t0)*1000))
+        return ChatResponse(
+            reply=reply,
+            map_update=map_update,
+            workflow_status=WorkflowStatus(
+                intent="geo_query",
+                status="terminated",
+                plan=["地名解析与地图定位"],
                 steps_completed=1,
                 steps_total=1,
                 steps=[],
@@ -293,10 +472,30 @@ async def run_workflow(query: str, session_id: str = "") -> ChatResponse:
                 "tool": s["tool"],
                 "success": s["success"],
                 "output_preview": (s["output"] or "")[:300],
+                "code": s.get("code") or "",
             }
             for s in state["steps"]
         ],
     )
+
+    resolved_map_context = map_context or {}
+    if map_update:
+        resolved_map_context = {
+            "center_lat": map_update.center_lat,
+            "center_lon": map_update.center_lon,
+            "zoom": map_update.zoom,
+        }
+    save_session_state(
+        session_id,
+        context_updates=state["context"],
+        map_context=resolved_map_context,
+        last_query=query,
+        last_reply=state["final_reply"],
+    )
+    write_log(session_id, intent="execution", query=query,
+              plan_steps=len(state["plan"]),
+              reply_preview=state["final_reply"] or "",
+              duration_ms=int((time.monotonic()-_t0)*1000))
 
     return ChatResponse(
         reply=state["final_reply"] or "工作流执行完成，但未生成汇总。",
@@ -312,7 +511,11 @@ def _evt(event_type: str, data: Any) -> str:
     return json.dumps({"type": event_type, "data": data}, ensure_ascii=False) + "\n"
 
 
-async def stream_workflow(query: str, session_id: str = "") -> AsyncGenerator[str, None]:
+async def stream_workflow(
+    query: str,
+    session_id: str = "",
+    map_context: Optional[Dict[str, Any]] = None,
+) -> AsyncGenerator[str, None]:
     """
     工作流流式入口：与 run_workflow 逻辑相同，但每个关键节点都立即 yield 一个事件，
     而不是等到全部完成后一次性返回。
@@ -320,18 +523,42 @@ async def stream_workflow(query: str, session_id: str = "") -> AsyncGenerator[st
     前端通过 httpx 流式接收，实时更新 st.status。
     """
     state = make_initial_state(query, session_id)
+    state["session_context"] = load_session_context(session_id)
+    state["context"].update(state["session_context"])
+    _t0 = time.monotonic()
     try:
         # ── 1. routing ────────────────────────────────────────────────────
         state["status"] = "routing"
         state["intent"] = await classify_intent(query)
         yield _evt("routing", {"intent": state["intent"]})
 
-        # 知识问答直接走 RAG
+        # 知识问答：走检索增强的单步回答
         if state["intent"] == "knowledge":
             yield _evt("summarizing", {})
-            from backend.app.rag.chains import run_rag
-            reply = await run_rag(query)
+            reply = await _answer_knowledge(query)
+            save_session_state(
+                session_id,
+                context_updates=state["context"],
+                map_context=map_context,
+                last_query=query,
+                last_reply=reply,
+            )
+            write_log(session_id, intent="knowledge", query=query, plan_steps=1,
+                      reply_preview=reply, duration_ms=int((time.monotonic()-_t0)*1000))
             yield _evt("done", {"reply": reply, "map_update": None})
+            return
+
+        # 地名定位：直接走 geocoder，单步完成
+        if state["intent"] == "geo_query":
+            yield _evt("summarizing", {})
+            map_update, reply = await _handle_geo_query(query, session_id, map_context)
+            save_session_state(session_id, last_reply=reply)
+            write_log(session_id, intent="geo_query", query=query, plan_steps=1,
+                      reply_preview=reply, duration_ms=int((time.monotonic()-_t0)*1000))
+            yield _evt("done", {
+                "reply": reply,
+                "map_update": map_update.model_dump() if map_update else None,
+            })
             return
 
         # ── 2. planning ───────────────────────────────────────────────────
@@ -361,6 +588,7 @@ async def stream_workflow(query: str, session_id: str = "") -> AsyncGenerator[st
                 "tool": done_result["tool"],
                 "success": done_result["success"],
                 "output_preview": (done_result["output"] or "")[:300],
+                "code": done_result.get("code") or "",
             })
 
         # ── 4. summarizing ────────────────────────────────────────────────
@@ -369,6 +597,24 @@ async def stream_workflow(query: str, session_id: str = "") -> AsyncGenerator[st
 
         # ── 5. 构建 done 事件 ─────────────────────────────────────────────
         map_update_dict = state.get("map_update")
+        resolved_map_context = map_context or {}
+        if map_update_dict:
+            resolved_map_context = {
+                "center_lat": map_update_dict.get("center_lat"),
+                "center_lon": map_update_dict.get("center_lon"),
+                "zoom": map_update_dict.get("zoom"),
+            }
+        save_session_state(
+            session_id,
+            context_updates=state["context"],
+            map_context=resolved_map_context,
+            last_query=query,
+            last_reply=state["final_reply"],
+        )
+        write_log(session_id, intent="execution", query=query,
+                  plan_steps=len(state["plan"]),
+                  reply_preview=state["final_reply"] or "",
+                  duration_ms=int((time.monotonic()-_t0)*1000))
         yield _evt("done", {
             "reply": state["final_reply"] or "工作流执行完成，但未生成汇总。",
             "map_update": map_update_dict,
@@ -385,6 +631,7 @@ async def stream_workflow(query: str, session_id: str = "") -> AsyncGenerator[st
                         "tool": s["tool"],
                         "success": s["success"],
                         "output_preview": (s["output"] or "")[:300],
+                        "code": s.get("code") or "",
                     }
                     for s in state["steps"]
                 ],

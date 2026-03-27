@@ -16,6 +16,7 @@ class StepResult(TypedDict):
     tool: str              # 调用的工具名称
     output: str            # 工具执行后的文本输出（stdout）
     tile_url: Optional[str]  # 若产生了地图图层，记录其 tile URL
+    code: Optional[str]    # gee_executor 步骤最终执行的 Python 代码
     success: bool
 
 
@@ -35,6 +36,7 @@ class WorkflowState(TypedDict):
 
     # 跨步骤共享上下文（inspect 步骤写入，execute 步骤读取）
     context: Dict[str, Any]
+    session_context: Dict[str, Any]   # 会话级上下文（跨请求持久）
 
     # 输出
     map_update: Optional[Dict[str, Any]]   # 地图更新，最终转为 MapUpdate
@@ -53,6 +55,7 @@ def make_initial_state(query: str, session_id: str = "") -> WorkflowState:
         "steps": [],
         "current_step": 0,
         "context": {},
+        "session_context": {},
         "map_update": None,
         "final_reply": None,
         "error": None,
