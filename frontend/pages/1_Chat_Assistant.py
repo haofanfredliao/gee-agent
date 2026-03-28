@@ -1,13 +1,6 @@
 """Chat Assistant：sidebar 聊天（含历史 tab），主区域全屏地图。"""
 import streamlit as st
 
-st.set_page_config(
-    page_title="GEE Geo 助手",
-    page_icon="🌍",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
 # ── 全屏地图 CSS ───────────────────────────────────────────────────────────────
 st.markdown(
     """
