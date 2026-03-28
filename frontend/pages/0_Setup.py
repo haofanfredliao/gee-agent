@@ -3,12 +3,6 @@ from pathlib import Path
 
 import streamlit as st
 
-st.set_page_config(
-    page_title="GEE 助手 · 初始配置",
-    page_icon="⚙️",
-    layout="centered",
-)
-
 _ROOT = Path(__file__).resolve().parents[2]
 _ENV_PATH = _ROOT / ".env"
 
@@ -135,6 +129,20 @@ _init("saved", False)
 
 
 # ── 页面布局 ──────────────────────────────────────────────────────────────────
+
+# 模拟 layout="centered"（宽布局下限制内容宽度）
+st.markdown(
+    """
+    <style>
+    section[data-testid="stMain"] > div.block-container {
+        max-width: 740px;
+        padding-top: 2rem;
+        margin: 0 auto;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 st.title("⚙️ GEE 助手 · 初始配置")
 
