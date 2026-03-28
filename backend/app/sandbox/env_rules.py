@@ -56,4 +56,12 @@ SANDBOX_CONSTRAINTS_BLOCK = """\
           return f.set('diversity', ee.Number(result.get('b1')))
       fc_with_diversity = fc.map(add_diversity)
     countDistinct() 与单 feature 的 reduceRegion 配合使用是正确的；与 reduceRegions（批量）配合或与 frequencyHistogram 混用时可能返回 0。
+11. 对 FeatureCollection 进行多键排序（主键 + 次键 tie-breaker）时，必须按"次键在前、主键在后"的顺序链式调用 .sort()：
+    因为 GEE 的 .sort() 是稳定排序，最后调用的 sort 决定最终主排序键。
+    正确示例（主键=多样性，次键=面积）：
+      sorted_fc = fc.sort('area', False).sort('diversity', False)  # 先排面积，再排多样性
+    错误示例（顺序颠倒，将以面积为主键）：
+      sorted_fc = fc.sort('diversity', False).sort('area', False)  # 错误！最终主键变成了面积
+12. 生成 GEE 分析代码时，scale 参数应与影像原始分辨率保持一致（如原始影像为 10m 则用 scale=10），
+    不要随意降低为 30 或使用 bestEffort=True 来规避像素超限——应先通过 maxPixels=1e10 或更大值解决超限问题。
 """
