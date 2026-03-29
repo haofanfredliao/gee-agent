@@ -4,6 +4,7 @@ pydantic>=2.0
 pyyaml>=6.0
 httpx>=0.26.0
 streamlit>=1.28.0
+streamlit-ace>=0.1.1
 pandas>=2.0.0
 chromadb>=0.4.0
 earthengine-api>=0.1.0
