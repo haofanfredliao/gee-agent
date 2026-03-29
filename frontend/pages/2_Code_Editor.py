@@ -43,29 +43,29 @@ _init(
 #   ee   —— 已初始化的 earthengine-api
 #   Map  —— 拦截 addLayer 并将图层渲染到右侧地图
 #
-# 示例：加载 Sentinel-2 影像
-image = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \\
-    .filterDate("2024-01-01", "2024-03-01") \\
-    .sort("CLOUDY_PIXEL_PERCENTAGE") \\
-    .first()
-
-vis = {"bands": ["B4", "B3", "B2"], "min": 0, "max": 3000}
-Map.addLayer(image, vis, "Sentinel-2 真彩色")
+# 示例：在地图上绘制一个矩形范围（香港）
+roi = ee.Geometry.Rectangle([113.8, 22.1, 114.5, 22.6])
+Map.addLayer(roi, {"color": "FF0000"}, "香港 ROI")
 """,
 )
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### 🖥️ GEE 代码编辑器")
-    st.caption("代码在沙箱中执行，已内置 `ee`（已初始化）与 `Map`，无需手动 `ee.Initialize()`。")
+    st.caption("已内置 `ee`（已初始化）与 `Map`，无需手动 `ee.Initialize()`。")
 
-    # ACE 编辑器
+    # ── 工具栏：按钮置于编辑器上方，用户打开侧栏即可看到 ──
+    col_run, col_clear = st.columns([2, 1])
+    run_clicked = col_run.button("▶ 运行", type="primary", use_container_width=True)
+    clear_clicked = col_clear.button("清空图层", use_container_width=True)
+
+    # ACE 编辑器（按钮之后渲染，但 session_state 已在上一次交互中同步）
     new_code = st_ace(
         value=st.session_state["editor_code"],
         language="python",
         theme="monokai",
         key="ace_editor",
-        height=400,
+        height=420,
         font_size=13,
         tab_size=4,
         wrap=False,
@@ -77,10 +77,6 @@ with st.sidebar:
     # 仅当编辑器返回非空内容时更新（ACE 首次渲染返回 None）
     if new_code is not None:
         st.session_state["editor_code"] = new_code
-
-    col_run, col_clear = st.columns([2, 1])
-    run_clicked = col_run.button("▶ 运行", type="primary", use_container_width=True)
-    clear_clicked = col_clear.button("清空图层", use_container_width=True)
 
     if clear_clicked:
         st.session_state["editor_map_layers"] = []
@@ -98,12 +94,12 @@ with st.sidebar:
                     result = run_sandbox_code(code_to_run)
                     st.session_state["editor_run_status"] = result.get("status")
                     st.session_state["editor_run_log"] = result.get("log", "")
-                    layers = result.get("layers", [])
-                    if layers:
-                        st.session_state["editor_map_layers"] = layers
+                    # 每次执行都完整覆盖图层，确保旧结果不残留
+                    st.session_state["editor_map_layers"] = result.get("layers", [])
                 except Exception as exc:
                     st.session_state["editor_run_status"] = "error"
                     st.session_state["editor_run_log"] = str(exc)
+                    st.session_state["editor_map_layers"] = []
             st.rerun()
 
     # 执行结果/日志
