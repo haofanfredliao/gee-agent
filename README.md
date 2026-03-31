@@ -2,6 +2,8 @@
 
 基于 **ReAct 架构**的 Google Earth Engine 智能助手，使用 FastAPI + Streamlit + Chroma 构建。
 
+
+
 ---
 
 ## 核心架构：ReAct Orchestrator
@@ -65,7 +67,7 @@ gee-agent/
 │   │                            #   GET /chat/basemap,
 │   │                            #   POST /chat/history, GET /chat/history/{id}
 │   ├── core/
-│   │   └── config.py            # settings.yaml 读取，含 ALLOWED_ORIGINS
+│   │   └── config.py            # 读取 .env + settings.yaml，暴露 GEE_PROJECT_ID、ALLOWED_ORIGINS 等
 │   ├── models/
 │   │   └── chat.py              # ChatRequest/Response, MapContext/Update, WorkflowStatus
 │   ├── agents/
@@ -87,7 +89,7 @@ gee-agent/
 │   │   └── geo/
 │   │       └── geocoder.py      # resolve_place() → 坐标 + zoom 计算
 │   └── services/
-│       ├── llm_client.py        # Poe API (OpenAI 兼容)
+│       ├── llm_client.py        # Poe API (OpenAI 兼容)；模型由 models.yaml 决定
 │       ├── embeddings.py        # sentence-transformers all-MiniLM-L6-v2
 │       ├── chroma_store.py      # Chroma 向量库读写
 │       ├── geocoding.py         # 底层地理编码 API 调用
@@ -97,15 +99,17 @@ gee-agent/
 ├── frontend/
 │   ├── app.py                   # Streamlit 多页入口
 │   ├── pages/
-│   │   └── 1_Chat_Assistant.py  # 聊天界面 + Folium 地图
+│   │   ├── 0_Setup.py           # ⚙️ 初始配置页：填写 API Key → 写入 .env
+│   │   ├── 1_Chat_Assistant.py  # 聊天界面 + Folium 地图
+│   │   └── 2_Code_Editor.py     # GEE 代码编辑器
 │   ├── components/
 │   │   ├── chat_ui.py
 │   │   └── map_view.py
 │   └── services/
 │       └── api_client.py        # chat(), chat_stream(), get_basemap_config(), save_history()
 ├── configs/
-│   ├── settings.example.yaml    # 含 security.allowed_origins 配置
-│   ├── models.yaml
+│   ├── settings.example.yaml    # 地图中心、CORS allowed_origins 等后端配置模板
+│   ├── models.yaml              # LLM 模型配置（实际生效的模型在此定义）
 │   └── gee_tasks.yaml
 ├── data/
 │   ├── chroma/                  # Chroma 向量库持久化
@@ -128,27 +132,55 @@ gee-agent/
 pip install -e .
 ```
 
-### 2. 配置
+### 2. 配置 API Key（推荐：Setup 页面）
+
+启动服务后，在浏览器打开前端的 **⚙️ Setup** 页面（`0_Setup.py`），可通过图形界面：
+
+- 填写并验证 **Poe API Key**（必填，用于 LLM 对话）
+- 填写并验证 **Google Geocoding API Key**（推荐，用于地名定位）
+- 填写并验证 **GEE Project ID**（推荐，用于卫星图像分析）
+
+保存后配置自动写入项目根目录的 `.env` 文件。
+
+**手动配置（可选）：** 也可直接在项目根目录创建 `.env` 文件：
+
+```dotenv
+POE_API_KEY=your-poe-api-key
+GEE_PROJECT_ID=your-gcp-project-id
+GEOCODING_API_KEY=your-geocoding-api-key
+BACKEND_URL=http://127.0.0.1:8000
+DEFAULT_MODEL=default
+```
+
+**后端行为相关配置（`configs/settings.yaml`）：**
 
 ```bash
 cp configs/settings.example.yaml configs/settings.yaml
-cp .env.example .env   # 填写 POE_API_KEY, GEOCODING_API_KEY, GEE_PROJECT_ID
 ```
 
-`settings.yaml` 关键配置项：
+`settings.yaml` 中需要关注的配置项（`llm.default_model` 字段在此文件中不生效，见下方说明）：
 
 ```yaml
-llm:
-  default_model: "gpt-4"
-
-gee:
-  project_id: "your-project-id"
-
 # 生产环境改为实际前端域名
 security:
   allowed_origins:
     - "http://localhost:8501"
 ```
+
+**LLM 模型配置（`configs/models.yaml`）：**
+
+实际生效的 LLM 模型由 `configs/models.yaml` 决定，而非 `settings.yaml`。`llm_client.py` 直接读取此文件和环境变量 `DEFAULT_MODEL` 来解析模型 ID。`.env` 中的 `DEFAULT_MODEL=default` 对应 `models.yaml` 里 `name: "default"` 的条目，当前为 `gemini-3.1-flash-lite`（通过 Poe API 调用）：
+
+```yaml
+llm:
+  default_model: "gemini-3.1-flash-lite"
+  models:
+    - name: "default"
+      provider: "poe"
+      model_id: "gemini-3.1-flash-lite"
+```
+
+> ⚠️ `settings.yaml` 中的 `llm.default_model` 字段目前未被 `llm_client.py` 读取，修改它不会改变实际使用的模型，请在 `models.yaml` 中修改。
 
 ### 3. 构建知识库（首次）
 

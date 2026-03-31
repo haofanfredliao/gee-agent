@@ -67,7 +67,9 @@ def _apply_map_update(update: dict) -> None:
     st.session_state["map_center_lat"] = update.get("center_lat", st.session_state["map_center_lat"])
     st.session_state["map_center_lon"] = update.get("center_lon", st.session_state["map_center_lon"])
     st.session_state["map_zoom"]        = update.get("zoom",       st.session_state["map_zoom"])
-    if update.get("layer_info"):
+    if update.get("layers"):
+        st.session_state["map_layers"] = update["layers"]
+    elif update.get("layer_info"):
         st.session_state["map_layers"] = [update["layer_info"]]
 
 

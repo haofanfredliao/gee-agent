@@ -46,7 +46,7 @@ def inspect_vector_asset(asset_id: str) -> Dict[str, Any]:
 
 def inspect_image_asset(asset_id: str) -> Dict[str, Any]:
     """
-    检查 GEE Image 的元数据（波段名、属性等）。
+    检查 GEE Image 的元数据（波段名、分辨率、属性等）。
 
     Returns
     -------
@@ -54,6 +54,7 @@ def inspect_image_asset(asset_id: str) -> Dict[str, Any]:
         status      : "ok" | "error"
         asset_id    : str
         bands       : List[str]
+        scales : Dict[str, float | None]  — 各波段分辨率（米），从 crs_transform 推导
         properties  : dict
     """
     from backend.app.services.gee_client import init_gee_client
@@ -64,10 +65,17 @@ def inspect_image_asset(asset_id: str) -> Dict[str, Any]:
         img = ee.Image(asset_id)
         info = img.getInfo()
         bands = [b["id"] for b in info.get("bands", [])]
+        # crs_transform = [x_scale, 0, x_origin, 0, y_scale, y_origin]
+        # 第一个元素的绝对值即为该波段的地面分辨率（单位：米，投影依赖 CRS）
+        band_scales: Dict[str, Any] = {}
+        for b in info.get("bands", []):
+            ct = b.get("crs_transform")
+            band_scales[b["id"]] = abs(ct[0]) if ct and len(ct) >= 1 else None
         return {
             "status": "ok",
             "asset_id": asset_id,
             "bands": bands,
+            "scales": band_scales,
             "properties": info.get("properties", {}),
         }
     except Exception as e:
