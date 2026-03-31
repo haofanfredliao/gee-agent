@@ -68,6 +68,14 @@ def get_basemap_config() -> Dict[str, Any]:
     return {"center_lat": 22.3193, "center_lon": 114.1694, "zoom": 10}
 
 
+def run_sandbox_code(code: str) -> Dict[str, Any]:
+    """在沙箱中执行 GEE Python 代码，返回 {status, log, tile_url, layers}。"""
+    with httpx.Client(timeout=TIMEOUT) as client:
+        r = client.post(_url("/sandbox/run"), json={"code": code})
+        r.raise_for_status()
+        return r.json()
+
+
 def save_history(session_id: str, messages: list) -> bool:
     """将对话历史持久化到后端 POST /chat/history，失败时静默返回 False。"""
     try:

@@ -26,12 +26,13 @@ def _poe_configured() -> bool:
 
 
 setup_page = st.Page("pages/0_Setup.py", title="初始配置", icon="⚙️")
-chat_page = st.Page("pages/1_Chat_Assistant.py", title="Chat Assistant", icon="🌍")
+chat_page = st.Page("pages/1_Chat_Assistant.py", title="GEE助手", icon="🌍")
+editor_page = st.Page("pages/2_Code_Editor.py", title="代码编辑器", icon="📝")
 
 # 首次加载：按配置状态决定默认落地页（第一项为默认）
 if _poe_configured():
-    pg = st.navigation([chat_page, setup_page])
+    pg = st.navigation([chat_page, editor_page, setup_page])
 else:
-    pg = st.navigation([setup_page, chat_page])
+    pg = st.navigation([setup_page, chat_page, editor_page])
 
 pg.run()
