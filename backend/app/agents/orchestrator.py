@@ -280,7 +280,8 @@ async def _execute_step(
             result["success"] = exec_result["status"] == "ok"
 
             # 更新地图 state：优先使用 session 中已知的地图中心
-            if exec_result.get("tile_url"):
+            all_layers = exec_result.get("layers") or []
+            if all_layers:
                 map_ctx = (state.get("session_context") or {}).get("map_context") or {}
                 center_lat = map_ctx.get("center_lat") or DEFAULT_CENTER_LAT
                 center_lon = map_ctx.get("center_lon") or DEFAULT_CENTER_LON
@@ -289,7 +290,8 @@ async def _execute_step(
                     "center_lat": center_lat,
                     "center_lon": center_lon,
                     "zoom": zoom,
-                    "layer_info": {"tile_url": exec_result["tile_url"]},
+                    "layer_info": {"tile_url": exec_result.get("tile_url")},
+                    "layers": all_layers,
                 }
 
     state["steps"].append(result)
