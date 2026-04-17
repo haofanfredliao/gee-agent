@@ -67,6 +67,8 @@ CODE_GEN_PROMPT = """\
 
 {context_section}
 
+{kb_section}
+
 {prev_steps_section}
 
 {session_section}
@@ -85,6 +87,8 @@ CODE_REPAIR_PROMPT = """\
 {step_description}
 
 {context_section}
+
+{kb_section}
 
 {prev_steps_section}
 

@@ -78,7 +78,9 @@ def similarity_search(query: str, k: int = 3) -> List[Dict[str, Any]]:
     coll = _collection()
     if coll is None:
         return []
-    result = coll.query(query_texts=[query], n_results=k, include=["documents", "metadatas"])
+    from backend.app.services.embeddings import get_embedding
+    query_vec = get_embedding(query)
+    result = coll.query(query_embeddings=[query_vec], n_results=k, include=["documents", "metadatas"])
     out = []
     if result["documents"] and result["documents"][0]:
         for doc, meta in zip(result["documents"][0], (result.get("metadatas") or [[]])[0] or []):
