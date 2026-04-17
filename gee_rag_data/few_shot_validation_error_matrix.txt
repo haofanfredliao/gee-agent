@@ -1,0 +1,82 @@
+## FEW_SHOT: Validation Error Matrix (Land Use 2021 as Reference)
+
+Intent: execution
+Task type: classification validation
+Keywords: errorMatrix, kappa, overall accuracy, producers accuracy, users accuracy, sampleRegions, actual, predicted, scale
+
+User task pattern:
+"Use land utilization map (2021) as reference to validate sample results, then compute error matrix, OA, PA, UA, and kappa."
+
+Assets in this case:
+- Reference map image: projects/ee-hku-geog7310/assets/LUM_end2021_mode
+- Validation samples: projects/ee-hku-geog7310/assets/samples_LUMHK
+
+Critical rules (must follow):
+1) Use inspect metadata to set sampling scale.
+   - Preferred: use image nominal scale from inspect output.
+   - Fallback: use projection nominal scale from the first band.
+   - Do not hardcode 30 when source data is 10 m.
+2) Do not swap actual and predicted in errorMatrix.
+   - actual = class from reference land-use map sampled to points.
+   - predicted = predicted class field in samples (here it is "pred").
+3) Field names must come from inspected schema.
+   - If samples contain both "pred" and "ref", do not assume "ref" is predicted.
+4) Respect Earth Engine lazy execution.
+   - Build server-side pipeline first.
+   - Only materialize small final outputs (matrix and metrics) at the end.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect image bands and nominal scale
+  - inspect sample properties and confirm predicted field name
+- Think:
+  - define explicit mapping: reference_map_value -> actual, sample_pred_field -> predicted
+  - ensure sampleRegions scale matches inspected image scale
+- Act:
+  - sample reference image at sample points
+  - compute confusion matrix and metrics
+  - print matrix, OA, PA, UA, Kappa
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+lum_image = ee.Image("projects/ee-hku-geog7310/assets/LUM_end2021_mode")
+samples = ee.FeatureCollection("projects/ee-hku-geog7310/assets/samples_LUMHK")
+
+# Get map band and nominal scale from the reference image.
+map_band = ee.String(lum_image.bandNames().get(0))
+map_scale = lum_image.select([map_band]).projection().nominalScale()
+
+# Keep sample prediction field. Rename map band so actual label is explicit.
+ref_map = lum_image.select([map_band]).rename("map_class")
+
+validated = ref_map.sampleRegions(
+    collection=samples,
+    properties=["pred", "ref"],
+    scale=map_scale,
+    geometries=False,
+)
+
+# IMPORTANT: actual is map_class (reference), predicted is sample field pred.
+error_matrix = validated.errorMatrix(actual="map_class", predicted="pred")
+
+overall_accuracy = error_matrix.accuracy()
+producers_accuracy = error_matrix.producersAccuracy()
+users_accuracy = error_matrix.consumersAccuracy()  # User's accuracy in GEE
+kappa = error_matrix.kappa()
+
+print("Error Matrix:", error_matrix.getInfo())
+print("Overall Accuracy:", overall_accuracy.getInfo())
+print("Producers Accuracy:", producers_accuracy.getInfo())
+print("Users Accuracy:", users_accuracy.getInfo())
+print("Kappa Index:", kappa.getInfo())
+```
+
+Anti-patterns to avoid:
+- Using scale=30 without inspecting image nominal scale.
+- Using actual='ref' and predicted='b1' by assumption.
+- Treating sampled map band as predicted and sample field as actual.
+
+Expected behavior for this pattern:
+- Kappa should align with the Code Editor baseline when field mapping and scale are correct.
