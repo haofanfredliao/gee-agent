@@ -229,10 +229,21 @@ async def _execute_step(
         context_section = _build_context_section(state["context"])
         prev_steps_section = _build_prev_steps_section(state["steps"])
         session_section = _build_session_section(state)
+
+        # RAG 检索：用步骤描述 + 用户总需求拼接查询，检索相关最佳实践
+        rag_query = f"{description} {state['query']}"
+        kb_hits = knowledge_base_lookup(rag_query, k=3)
+        kb_section = (
+            "【RAG 知识库参考 — 本任务相关最佳实践，优先遵循】\n" + kb_hits
+            if kb_hits and kb_hits != "（未找到相关文档）"
+            else ""
+        )
+
         code_prompt = CODE_GEN_PROMPT.format(
             query=state["query"],
             step_description=description,
             context_section=context_section,
+            kb_section=kb_section,
             prev_steps_section=prev_steps_section,
             session_section=session_section,
         )
@@ -260,6 +271,7 @@ async def _execute_step(
                         query=state["query"],
                         step_description=description,
                         context_section=context_section,
+                        kb_section=kb_section,
                         prev_steps_section=prev_steps_section,
                         original_code=code,
                         error_log=error_log,
