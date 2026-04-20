@@ -1,0 +1,770 @@
+## GEE Dataset Catalog
+Generated from Earth Engine STAC metadata.
+Generated at: 2026-04-19 13:43:18 UTC
+Dataset ID source: E:/HKUGEODS/GEOG7310/groupwork/gee-agent-main/gee-agent/gee_rag_data/dataset_ids_common.txt
+Notes:
+- Keep one dataset per card.
+- Use `===` as the card separator (required by current chunking setup).
+- `Selection constraints`, `Recommended preprocessing`, `Warnings` are placeholders for manual enrichment.
+===
+## COPERNICUS/S2_SR_HARMONIZED
+Name: Harmonized Sentinel-2 MSI: MultiSpectral Instrument, Level-2A (SR)
+Asset ID: COPERNICUS/S2_SR_HARMONIZED
+Type: ee.ImageCollection
+Status: ready
+Categories: satellite-imagery
+Temporal coverage: 2017-03-28T00:00:00Z -> 2026-04-19T08:27:28.885000Z
+Update frequency: 5 day revisit_interval
+Spatial bbox: [-180, -56, 180, 83]
+License: proprietary
+Providers: European Union/ESA/Copernicus, Google Earth Engine
+Keywords: copernicus, esa, eu, msi, reflectance, satellite-imagery, sentinel, sr
+Terms (short): The use of Sentinel data is governed by the [Copernicus Sentinel Data Terms and Conditions.](https://scihub.copernicus.eu/twiki/pub/SciHubWebPortal/TermsConditions/Sentinel_Data_Terms_and_Conditions.pdf)
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/COPERNICUS/COPERNICUS_S2_SR_HARMONIZED.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_S2_SR_HARMONIZED#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/COPERNICUS/COPERNICUS_S2_SR_HARMONIZED
+Preview image: https://developers.google.com/earth-engine/datasets/images/COPERNICUS/COPERNICUS_S2_SR_HARMONIZED_sample.png
+
+Selection constraints:
+  - Use this as the default Sentinel-2 SR collection.
+  - Map common aliases (Sentinel-2/S2/S2 SR/哨兵2) to this asset id.
+Recommended preprocessing:
+  - Mask clouds with COPERNICUS/S2_CLOUD_PROBABILITY before compositing.
+  - Scale SR bands using scale factor 0.0001 when computing indices.
+Warnings:
+  - Critical: do NOT use deprecated COPERNICUS/S2_SR.
+  - Always use COPERNICUS/S2_SR_HARMONIZED for Sentinel-2 SR workflows.
+
+Key bands:
+  - B1 (gsd=60, scale=0.0001): Aerosols
+  - B2 (gsd=10, scale=0.0001): Blue
+  - B3 (gsd=10, scale=0.0001): Green
+  - B4 (gsd=10, scale=0.0001): Red
+  - B5 (gsd=20, scale=0.0001): Red Edge 1
+  - B6 (gsd=20, scale=0.0001): Red Edge 2
+  - B7 (gsd=20, scale=0.0001): Red Edge 3
+  - B8 (gsd=10, scale=0.0001): NIR
+  - B8A (gsd=20, scale=0.0001): Red Edge 4
+  - B9 (gsd=60, scale=0.0001): Water vapor
+  - B11 (gsd=20, scale=0.0001): SWIR 1
+  - B12 (gsd=20, scale=0.0001): SWIR 2
+Key properties:
+  - AOT_RETRIEVAL_ACCURACY (DOUBLE): Accuracy of Aerosol Optical thickness model
+  - CLOUDY_PIXEL_PERCENTAGE (DOUBLE): Granule-specific cloudy pixel percentage taken from the original metadata
+  - CLOUD_COVERAGE_ASSESSMENT (DOUBLE): Cloudy pixel percentage for the whole archive that contains this granule. Taken from the original metadata
+  - CLOUDY_SHADOW_PERCENTAGE (DOUBLE): Percentage of pixels classified as cloud shadow
+  - DARK_FEATURES_PERCENTAGE (DOUBLE): Percentage of pixels classified as dark features or shadows
+  - DATASTRIP_ID (STRING): Unique identifier of the datastrip Product Data Item (PDI)
+  - DATATAKE_IDENTIFIER (STRING): Uniquely identifies a given Datatake. The ID contains the Sentinel-2 satellite, start date and time, absolute orbit number, and processing baseline.
+  - DATATAKE_TYPE (STRING): MSI operation mode
+  - DEGRADED_MSI_DATA_PERCENTAGE (DOUBLE): Percentage of degraded MSI and ancillary data
+  - FORMAT_CORRECTNESS (STRING): Synthesis of the On-Line Quality Control (OLQC) checks performed at granule (Product_Syntax) and datastrip (Product Syntax and DS_Consistency) levels
+  - GENERAL_QUALITY (STRING): Synthesis of the OLQC checks performed at the datastrip level (Relative_Orbit_Number)
+  - GENERATION_TIME (DOUBLE): Product generation time
+===
+## COPERNICUS/S2_CLOUD_PROBABILITY
+Name: Sentinel-2: Cloud Probability
+Asset ID: COPERNICUS/S2_CLOUD_PROBABILITY
+Type: ee.ImageCollection
+Status: ready
+Categories: satellite-imagery
+Temporal coverage: 2015-06-27T00:00:00Z -> 2026-04-19T08:15:59Z
+Update frequency: 5 day revisit_interval
+Spatial bbox: [-180, -56, 180, 83]
+License: proprietary
+Providers: European Union/ESA/Copernicus/SentinelHub, Google Earth Engine
+Keywords: cloud, copernicus, esa, eu, msi, radiance, satellite-imagery, sentinel, sentinelhub
+Terms (short): The use of Sentinel data is governed by the [Copernicus Sentinel Data Terms and Conditions.](https://scihub.copernicus.eu/twiki/pub/SciHubWebPortal/TermsConditions/Sentinel_Data_Terms_and_Conditions.pdf)
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/COPERNICUS/COPERNICUS_S2_CLOUD_PROBABILITY.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_S2_CLOUD_PROBABILITY#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/COPERNICUS/COPERNICUS_S2_CLOUD_PROBABILITY
+Preview image: https://developers.google.com/earth-engine/datasets/images/COPERNICUS/COPERNICUS_S2_CLOUD_PROBABILITY_sample.png
+
+Selection constraints:
+  - TODO
+Recommended preprocessing:
+  - TODO
+Warnings:
+  - TODO
+
+Key bands:
+  - probability (gsd=10): Probability that the pixel is cloudy.
+Key properties:
+  - (no gee:schema in STAC summaries)
+===
+## LANDSAT/LC08/C02/T1_L2
+Name: USGS Landsat 8 Level 2, Collection 2, Tier 1
+Asset ID: LANDSAT/LC08/C02/T1_L2
+Type: ee.ImageCollection
+Status: ready
+Categories: satellite-imagery
+Temporal coverage: 2013-03-18T15:58:14Z -> 2026-04-11T14:20:42.507000Z
+Update frequency: 16 day revisit_interval
+Spatial bbox: [-180, -90, 180, 90]
+License: proprietary
+Providers: USGS, Google Earth Engine
+Keywords: cfmask, cloud, fmask, global, l8sr, landsat, lasrc, lc08, lst, reflectance, satellite-imagery, sr
+Terms (short): Landsat datasets are federally created data and therefore reside in the public domain and may be used, transferred, or reproduced without copyright restriction. Acknowledgement or credit of the USGS as data source sho...
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/LANDSAT/LANDSAT_LC08_C02_T1_L2.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_LC08_C02_T1_L2#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/LANDSAT/LANDSAT_LC08_C02_T1_L2
+Preview image: https://developers.google.com/earth-engine/datasets/images/LANDSAT/LANDSAT_LC08_C02_T1_L2_sample.png
+
+Selection constraints:
+  - TODO
+Recommended preprocessing:
+  - TODO
+Warnings:
+  - TODO
+
+Key bands:
+  - SR_B1 (gsd=30, scale=2.75e-05): Band 1 (ultra blue, coastal aerosol) surface reflectance
+  - SR_B2 (gsd=30, scale=2.75e-05): Band 2 (blue) surface reflectance
+  - SR_B3 (gsd=30, scale=2.75e-05): Band 3 (green) surface reflectance
+  - SR_B4 (gsd=30, scale=2.75e-05): Band 4 (red) surface reflectance
+  - SR_B5 (gsd=30, scale=2.75e-05): Band 5 (near infrared) surface reflectance
+  - SR_B6 (gsd=30, scale=2.75e-05): Band 6 (shortwave infrared 1) surface reflectance
+  - SR_B7 (gsd=30, scale=2.75e-05): Band 7 (shortwave infrared 2) surface reflectance
+  - SR_QA_AEROSOL (gsd=30): Aerosol attributes
+  - ST_B10 (gsd=30, unit=K, scale=0.00341802): Band 10 surface temperature. If 'PROCESSING_LEVEL' is set to 'L2SR', this band is fully masked out.
+  - ST_ATRAN (gsd=30, scale=0.0001): Atmospheric Transmittance. If 'PROCESSING_LEVEL' is set to 'L2SR', this band is fully masked out.
+  - ST_CDIST (gsd=30, unit=km, scale=0.01): Pixel distance to cloud. If 'PROCESSING_LEVEL' is set to 'L2SR', this band is fully masked out.
+  - ST_DRAD (gsd=30, unit=W/(m^2*sr*um)/ DN, scale=0.001): Downwelled Radiance. If 'PROCESSING_LEVEL' is set to 'L2SR', this band is fully masked out.
+Key properties:
+  - ALGORITHM_SOURCE_SURFACE_REFLECTANCE (STRING): Name and version of the surface reflectance algorithm.
+  - ALGORITHM_SOURCE_SURFACE_TEMPERATURE (STRING): Name and version of the surface temperature algorithm.
+  - CLOUD_COVER (DOUBLE): Percentage cloud cover (0-100), -1 = not calculated.
+  - CLOUD_COVER_LAND (DOUBLE): Percentage cloud cover over land (0-100), -1 = not calculated.
+  - COLLECTION_CATEGORY (STRING): Scene collection category, "T1" or "T2".
+  - DATA_SOURCE_AIR_TEMPERATURE (STRING): Air temperature data source.
+  - DATA_SOURCE_ELEVATION (STRING): Elevation data source.
+  - DATA_SOURCE_OZONE (STRING): Ozone data source.
+  - DATA_SOURCE_PRESSURE (STRING): Pressure data source.
+  - DATA_SOURCE_REANALYSIS (STRING): Reanalysis data source.
+  - DATA_SOURCE_TIRS_STRAY_LIGHT_CORRECTION (STRING): TIRS stray light correction data source.
+  - DATA_SOURCE_WATER_VAPOR (STRING): Water vapor data source.
+===
+## LANDSAT/LC09/C02/T1_L2
+Name: USGS Landsat 9 Level 2, Collection 2, Tier 1
+Asset ID: LANDSAT/LC09/C02/T1_L2
+Type: ee.ImageCollection
+Status: ready
+Categories: satellite-imagery
+Temporal coverage: 2021-10-31T00:00:00Z -> 2026-04-15T22:51:15.894000Z
+Update frequency: 16 day revisit_interval
+Spatial bbox: [-180, -90, 180, 90]
+License: proprietary
+Providers: USGS, Google Earth Engine
+Keywords: cfmask, cloud, fmask, global, l9sr, landsat, lasrc, lc09, lst, reflectance, satellite-imagery, sr
+Terms (short): Landsat datasets are federally created data and therefore reside in the public domain and may be used, transferred, or reproduced without copyright restriction. Acknowledgement or credit of the USGS as data source sho...
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/LANDSAT/LANDSAT_LC09_C02_T1_L2.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_LC09_C02_T1_L2#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/LANDSAT/LANDSAT_LC09_C02_T1_L2
+Preview image: https://developers.google.com/earth-engine/datasets/images/LANDSAT/LANDSAT_LC09_C02_T1_L2_sample.png
+
+Selection constraints:
+  - TODO
+Recommended preprocessing:
+  - TODO
+Warnings:
+  - TODO
+
+Key bands:
+  - SR_B1 (gsd=30, scale=2.75e-05): Band 1 (ultra blue, coastal aerosol) surface reflectance
+  - SR_B2 (gsd=30, scale=2.75e-05): Band 2 (blue) surface reflectance
+  - SR_B3 (gsd=30, scale=2.75e-05): Band 3 (green) surface reflectance
+  - SR_B4 (gsd=30, scale=2.75e-05): Band 4 (red) surface reflectance
+  - SR_B5 (gsd=30, scale=2.75e-05): Band 5 (near infrared) surface reflectance
+  - SR_B6 (gsd=30, scale=2.75e-05): Band 6 (shortwave infrared 1) surface reflectance
+  - SR_B7 (gsd=30, scale=2.75e-05): Band 7 (shortwave infrared 2) surface reflectance
+  - SR_QA_AEROSOL (gsd=30): Aerosol attributes
+  - ST_B10 (gsd=30, unit=K, scale=0.00341802): Band 10 surface temperature. If 'PROCESSING_LEVEL' is set to 'L2SR', this band is fully masked out.
+  - ST_ATRAN (gsd=30, scale=0.0001): Atmospheric Transmittance. If 'PROCESSING_LEVEL' is set to 'L2SR', this band is fully masked out.
+  - ST_CDIST (gsd=30, unit=km, scale=0.01): Pixel distance to cloud. If 'PROCESSING_LEVEL' is set to 'L2SR', this band is fully masked out.
+  - ST_DRAD (gsd=30, unit=W/(m^2*sr*um)/ DN, scale=0.001): Downwelled Radiance. If 'PROCESSING_LEVEL' is set to 'L2SR', this band is fully masked out.
+Key properties:
+  - ALGORITHM_SOURCE_SURFACE_REFLECTANCE (STRING): Name and version of the surface reflectance algorithm.
+  - ALGORITHM_SOURCE_SURFACE_TEMPERATURE (STRING): Name and version of the surface temperature algorithm.
+  - CLOUD_COVER (DOUBLE): Percentage cloud cover (0-100), -1 = not calculated.
+  - CLOUD_COVER_LAND (DOUBLE): Percentage cloud cover over land (0-100), -1 = not calculated.
+  - COLLECTION_CATEGORY (STRING): Scene collection category, "T1" or "T2".
+  - DATA_SOURCE_AIR_TEMPERATURE (STRING): Air temperature data source.
+  - DATA_SOURCE_ELEVATION (STRING): Elevation data source.
+  - DATA_SOURCE_OZONE (STRING): Ozone data source.
+  - DATA_SOURCE_PRESSURE (STRING): Pressure data source.
+  - DATA_SOURCE_REANALYSIS (STRING): Reanalysis data source.
+  - DATA_SOURCE_TIRS_STRAY_LIGHT_CORRECTION (STRING): TIRS stray light correction data source.
+  - DATA_SOURCE_WATER_VAPOR (STRING): Water vapor data source.
+===
+## MODIS/006/MOD13Q1
+Name: MOD13Q1.006 Terra Vegetation Indices 16-Day Global 250m [deprecated]
+Asset ID: MODIS/006/MOD13Q1
+Type: ee.ImageCollection
+Status: deprecated
+Categories: vegetation-indices
+Temporal coverage: 2000-02-18T00:00:00Z -> 2023-02-02T00:00:00Z
+Update frequency: 16 day cadence
+Spatial bbox: [-180, -90, 180, 90]
+License: proprietary
+Providers: NASA LP DAAC at the USGS EROS Center, Google Earth Engine
+Keywords: 16-day, evi, global, mod13q1, modis, nasa, ndvi, terra, usgs, vegetation, vegetation-indices
+Terms (short): MODIS data and products acquired through the LP DAAC have no restrictions on subsequent use, sale, or redistribution.
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/MODIS/MODIS_006_MOD13Q1.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/MODIS_006_MOD13Q1#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/MODIS/MODIS_006_MOD13Q1
+Preview image: https://developers.google.com/earth-engine/datasets/images/MODIS/MODIS_006_MOD13Q1_sample.png
+
+Selection constraints:
+  - TODO
+Recommended preprocessing:
+  - TODO
+Warnings:
+  - TODO
+
+Key bands:
+  - NDVI (gsd=250, scale=0.0001): Normalized Difference Vegetation Index
+  - EVI (gsd=250, scale=0.0001): Enhanced Vegetation Index
+  - DetailedQA (gsd=250): VI quality indicators
+  - sur_refl_b01 (gsd=250, scale=0.0001): Red surface reflectance
+  - sur_refl_b02 (gsd=250, scale=0.0001): NIR surface reflectance
+  - sur_refl_b03 (gsd=250, scale=0.0001): Blue surface reflectance
+  - sur_refl_b07 (gsd=250, scale=0.0001): MIR surface reflectance
+  - ViewZenith (gsd=250, unit=deg, scale=0.01): View zenith angle
+  - SolarZenith (gsd=250, unit=deg, scale=0.01): Solar zenith angle
+  - RelativeAzimuth (gsd=250, unit=deg, scale=0.01): Relative azimuth angle
+  - DayOfYear (gsd=250): Julian day of year
+  - SummaryQA (gsd=250): Quality reliability of VI pixel
+Key properties:
+  - (no gee:schema in STAC summaries)
+===
+## ESA/WorldCover/v200
+Name: ESA WorldCover 10m v200
+Asset ID: ESA/WorldCover/v200
+Type: ee.ImageCollection
+Status: ready
+Categories: landuse-landcover
+Temporal coverage: 2021-01-01T00:00:00Z -> 2022-01-01T00:00:00Z
+Update frequency: unknown
+Spatial bbox: [-180, -90, 180, 90]
+License: CC-BY-4.0
+Providers: ESA WorldCover Consortium, Google Earth Engine
+Keywords: esa, landcover, landuse, landuse-landcover, sentinel1-derived, sentinel2-derived
+Terms (short): [CC-BY-4.0](https://spdx.org/licenses/CC-BY-4.0.html)
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/ESA/ESA_WorldCover_v200.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/ESA_WorldCover_v200#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/ESA/ESA_WorldCover_v200
+Preview image: https://developers.google.com/earth-engine/datasets/images/ESA/ESA_WorldCover_v200_sample.png
+
+Selection constraints:
+  - TODO
+Recommended preprocessing:
+  - TODO
+Warnings:
+  - TODO
+
+Key bands:
+  - Map (gsd=10): Landcover class
+Key properties:
+  - (no gee:schema in STAC summaries)
+===
+## GOOGLE/DYNAMICWORLD/V1
+Name: Dynamic World V1
+Asset ID: GOOGLE/DYNAMICWORLD/V1
+Type: ee.ImageCollection
+Status: ready
+Categories: landuse-landcover
+Temporal coverage: 2015-06-27T00:00:00Z -> 2026-04-19T07:27:59.277000Z
+Update frequency: unknown
+Spatial bbox: [-180, -90, 180, 90]
+License: CC-BY-4.0
+Providers: World Resources Institute, Google, Google Earth Engine
+Keywords: global, google, landcover, landuse, landuse-landcover, nrt, sentinel2-derived
+Terms (short): [CC-BY-4.0](https://spdx.org/licenses/CC-BY-4.0.html) This dataset is licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/) and requires the following attribution: "This dataset is produced for the...
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/GOOGLE/GOOGLE_DYNAMICWORLD_V1.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/GOOGLE_DYNAMICWORLD_V1#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/GOOGLE/GOOGLE_DYNAMICWORLD_V1
+Preview image: https://developers.google.com/earth-engine/datasets/images/GOOGLE/GOOGLE_DYNAMICWORLD_V1_sample.png
+
+Selection constraints:
+  - TODO
+Recommended preprocessing:
+  - TODO
+Warnings:
+  - TODO
+
+Key bands:
+  - water (gsd=10): Estimated probability of complete coverage by water
+  - trees (gsd=10): Estimated probability of complete coverage by trees
+  - grass (gsd=10): Estimated probability of complete coverage by grass
+  - flooded_vegetation (gsd=10): Estimated probability of complete coverage by flooded vegetation
+  - crops (gsd=10): Estimated probability of complete coverage by crops
+  - shrub_and_scrub (gsd=10): Estimated probability of complete coverage by shrub and scrub
+  - built (gsd=10): Estimated probability of complete coverage by built
+  - bare (gsd=10): Estimated probability of complete coverage by bare
+  - snow_and_ice (gsd=10): Estimated probability of complete coverage by snow and ice
+  - label (gsd=10): Index of the band with the highest estimated probability
+Key properties:
+  - dynamicworld_algorithm_version (STRING): The version string uniquely identifying the Dynamic World model and inference process used to produce the image.
+  - qa_algorithm_version (STRING): The version string uniquely identifying the cloud masking process used to produce the image.
+===
+## MODIS/061/MCD12Q1
+Name: MCD12Q1.061 MODIS Land Cover Type Yearly Global 500m
+Asset ID: MODIS/061/MCD12Q1
+Type: ee.ImageCollection
+Status: ready
+Categories: landuse-landcover
+Temporal coverage: 2001-01-01T00:00:00Z -> 2024-01-01T00:00:00Z
+Update frequency: 1 year cadence
+Spatial bbox: [-180, -90, 180, 90]
+License: proprietary
+Providers: NASA LP DAAC at the USGS EROS Center, Google Earth Engine
+Keywords: landcover, landuse-landcover, modis, nasa, usgs, yearly
+Terms (short): MODIS data and products acquired through the LP DAAC have no restrictions on subsequent use, sale, or redistribution.
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/MODIS/MODIS_061_MCD12Q1.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MCD12Q1#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/MODIS/MODIS_061_MCD12Q1
+Preview image: https://developers.google.com/earth-engine/datasets/images/MODIS/MODIS_061_MCD12Q1_sample.png
+
+Selection constraints:
+  - TODO
+Recommended preprocessing:
+  - TODO
+Warnings:
+  - TODO
+
+Key bands:
+  - LC_Type1 (gsd=500): Land Cover Type 1: Annual International Geosphere-Biosphere Programme (IGBP) classification
+  - LC_Type2 (gsd=500): Land Cover Type 2: Annual University of Maryland (UMD) classification
+  - LC_Type3 (gsd=500): Land Cover Type 3: Annual Leaf Area Index (LAI) classification
+  - LC_Type4 (gsd=500): Land Cover Type 4: Annual BIOME-Biogeochemical Cycles (BGC) classification
+  - LC_Type5 (gsd=500): Land Cover Type 5: Annual Plant Functional Types classification
+  - LC_Prop1_Assessment (gsd=500, unit=%): LCCS1 land cover layer confidence
+  - LC_Prop2_Assessment (gsd=500, unit=%): LCCS2 land use layer confidence
+  - LC_Prop3_Assessment (gsd=500, unit=%): LCCS3 surface hydrology layer confidence
+  - LC_Prop1 (gsd=500): FAO-Land Cover Classification System 1 (LCCS1) land cover layer
+  - LC_Prop2 (gsd=500): FAO-LCCS2 land use layer
+  - LC_Prop3 (gsd=500): FAO-LCCS3 surface hydrology layer
+  - QC (gsd=500): Product quality flags
+Key properties:
+  - (no gee:schema in STAC summaries)
+===
+## Tsinghua/FROM-GLC/GAIA/v10
+Name: Tsinghua FROM-GLC Year of Change to Impervious Surface
+Asset ID: Tsinghua/FROM-GLC/GAIA/v10
+Type: ee.Image
+Status: ready
+Categories: population
+Temporal coverage: 1985-01-01T00:00:00Z -> 2018-12-31T00:00:00Z
+Update frequency: unknown
+Spatial bbox: [-180, -90, 180, 90]
+License: CC-BY-4.0
+Providers: Tsinghua University, Google Earth Engine
+Keywords: built, development, impervious, population, tsinghua, urban
+Terms (short): This work is licensed under a Creative Commons Attribution 4.0 International License. [https://creativecommons.org/licenses/by/4.0/](https://creativecommons.org/licenses/by/4.0/)
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/Tsinghua/Tsinghua_FROM-GLC_GAIA_v10.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/Tsinghua_FROM-GLC_GAIA_v10#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/Tsinghua/Tsinghua_FROM-GLC_GAIA_v10
+Preview image: https://developers.google.com/earth-engine/datasets/images/Tsinghua/Tsinghua_FROM-GLC_GAIA_v10_sample.png
+
+Selection constraints:
+  - TODO
+Recommended preprocessing:
+  - TODO
+Warnings:
+  - TODO
+
+Key bands:
+  - change_year_index (gsd=30): Year of the transition from from pervious to impervious. From 34 (year: 1985) to 1 (year: 2018)
+Key properties:
+  - (no gee:schema in STAC summaries)
+===
+## USGS/SRTMGL1_003
+Name: NASA SRTM Digital Elevation 30m
+Asset ID: USGS/SRTMGL1_003
+Type: ee.Image
+Status: ready
+Categories: elevation-topography
+Temporal coverage: 2000-02-11T00:00:00Z -> 2000-02-22T00:00:00Z
+Update frequency: unknown
+Spatial bbox: [-180, -56, 180, 60]
+License: proprietary
+Providers: NASA / USGS / JPL-Caltech, Google Earth Engine
+Keywords: dem, elevation, elevation-topography, geophysical, nasa, srtm, topography, usgs
+Terms (short): Unless otherwise noted, images and video on JPL public web sites (public sites ending with a jpl.nasa.gov address) may be used for any purpose without prior permission. For more information and exceptions visit the [J...
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/USGS/USGS_SRTMGL1_003.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/USGS_SRTMGL1_003#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/USGS/USGS_SRTMGL1_003
+Preview image: https://developers.google.com/earth-engine/datasets/images/USGS/USGS_SRTMGL1_003_sample.png
+
+Selection constraints:
+  - TODO
+Recommended preprocessing:
+  - TODO
+Warnings:
+  - TODO
+
+Key bands:
+  - elevation (gsd=30, unit=m): Elevation
+Key properties:
+  - (no gee:schema in STAC summaries)
+===
+## COPERNICUS/DEM/GLO30
+Name: Copernicus DEM GLO-30: Global 30m Digital Elevation Model
+Asset ID: COPERNICUS/DEM/GLO30
+Type: ee.ImageCollection
+Status: ready
+Categories: elevation-topography
+Temporal coverage: 2010-12-01T00:00:00Z -> 2015-01-31T00:00:00Z
+Update frequency: unknown
+Spatial bbox: [-180, -90, 180, 90]
+License: proprietary
+Providers: Copernicus, Google Earth Engine
+Keywords: copernicus, dem, elevation, elevation-topography, geophysical
+Terms (short): The GLO-30 dataset is available worldwide with a free license with the exception of two countries (Armenia and Azerbaijan). [License for Copernicus DEM](https://docs.sentinel-hub.com/api/latest/static/files/data/dem/r...
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/COPERNICUS/COPERNICUS_DEM_GLO30.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_DEM_GLO30#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/COPERNICUS/COPERNICUS_DEM_GLO30
+Preview image: https://developers.google.com/earth-engine/datasets/images/COPERNICUS/COPERNICUS_DEM_GLO30_sample.png
+
+Selection constraints:
+  - TODO
+Recommended preprocessing:
+  - TODO
+Warnings:
+  - TODO
+
+Key bands:
+  - DEM (gsd=30): Digital Surface Model
+  - EDM (gsd=30): The Edit Data Mask indicates all DEM pixels that were modified during the terrain and hydro editing process.
+  - FLM (gsd=30): The Filling Mask is created primarily during the terrain editing process.
+  - HEM (gsd=30): The Height Error Mask represents the corresponding height error for each DEM pixel in the form of the standard deviation derived from the interferometric coherence and geometric...
+  - WBM (gsd=30): The Water Body Mask shows all DEM pixels which are classified as water and edited according to the categories Ocean, Lake or River.
+Key properties:
+  - (no gee:schema in STAC summaries)
+===
+## JRC/GSW1_4/GlobalSurfaceWater
+Name: JRC Global Surface Water Mapping Layers, v1.4
+Asset ID: JRC/GSW1_4/GlobalSurfaceWater
+Type: ee.Image
+Status: ready
+Categories: surface-ground-water
+Temporal coverage: 1984-03-16T00:00:00Z -> 2022-01-01T00:00:00Z
+Update frequency: unknown
+Spatial bbox: [-180, -90, 180, 90]
+License: proprietary
+Providers: EC JRC / Google, Google Earth Engine
+Keywords: change-detection, geophysical, google, jrc, landsat-derived, surface, surface-ground-water, water
+Terms (short): All data here is produced under the Copernicus Programme and is provided free of charge, without restriction of use. For the full license information see the Copernicus Regulation. Publications, models, and data produ...
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/JRC/JRC_GSW1_4_GlobalSurfaceWater.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/JRC_GSW1_4_GlobalSurfaceWater#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/JRC/JRC_GSW1_4_GlobalSurfaceWater
+Preview image: https://developers.google.com/earth-engine/datasets/images/JRC/JRC_GSW1_4_GlobalSurfaceWater_sample.png
+
+Selection constraints:
+  - TODO
+Recommended preprocessing:
+  - TODO
+Warnings:
+  - TODO
+
+Key bands:
+  - occurrence (gsd=30, unit=%): The frequency with which water was present.
+  - change_abs (gsd=30, unit=%): Absolute change in occurrence between two epochs: 1984-1999 vs 2000-2021.
+  - change_norm (gsd=30, unit=%): Normalized change in occurrence. (epoch1-epoch2)/(epoch1+epoch2) * 100
+  - seasonality (gsd=30): Number of months water is present.
+  - recurrence (gsd=30, unit=%): The frequency with which water returns from year to year.
+  - transition (gsd=30): Categorical classification of change between first and last year.
+  - max_extent (gsd=30): Binary image containing 1 anywhere water has ever been detected.
+Key properties:
+  - (no gee:schema in STAC summaries)
+===
+## UCSB-CHG/CHIRPS/DAILY
+Name: CHIRPS Precipitation Daily: Climate Hazards Center InfraRed Precipitation With Station Data (Version 2.0 Final)
+Asset ID: UCSB-CHG/CHIRPS/DAILY
+Type: ee.ImageCollection
+Status: ready
+Categories: precipitation
+Temporal coverage: 1981-01-01T00:00:00Z -> 2026-03-31T00:00:00Z
+Update frequency: 1 day cadence
+Spatial bbox: [-180, -50, 180, 50]
+License: proprietary
+Providers: UCSB/CHG, Google Earth Engine
+Keywords: chg, climate, geophysical, precipitation, ucsb, weather
+Terms (short): This dataset is in the public domain. To the extent possible under law, [Pete Peterson](https://chc.ucsb.edu/people/pete-peterson) has waived all copyright and related or neighboring rights to Climate Hazards Center I...
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/UCSB-CHG/UCSB-CHG_CHIRPS_DAILY.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/UCSB-CHG_CHIRPS_DAILY#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/UCSB-CHG/UCSB-CHG_CHIRPS_DAILY
+Preview image: https://developers.google.com/earth-engine/datasets/images/UCSB-CHG/UCSB-CHG_CHIRPS_DAILY_sample.png
+
+Selection constraints:
+  - TODO
+Recommended preprocessing:
+  - TODO
+Warnings:
+  - TODO
+
+Key bands:
+  - precipitation (gsd=5566, unit=mm/d): Precipitation
+Key properties:
+  - (no gee:schema in STAC summaries)
+===
+## ECMWF/ERA5_LAND/DAILY_AGGR
+Name: ERA5-Land Daily Aggregated - ECMWF Climate Reanalysis
+Asset ID: ECMWF/ERA5_LAND/DAILY_AGGR
+Type: ee.ImageCollection
+Status: ready
+Categories: climate
+Temporal coverage: 1950-01-02T00:00:00Z -> 2026-04-11T00:00:00Z
+Update frequency: 1 month cadence
+Spatial bbox: [-180, -90, 180, 90]
+License: proprietary
+Providers: Daily Aggregates: Google and Copernicus Climate Data Store, Google Earth Engine
+Keywords: cds, climate, copernicus, ecmwf, era5-land, evaporation, heat, lakes, precipitation, pressure, radiation, reanalysis
+Terms (short): Please acknowledge the use of ERA5-Land as stated in the [Copernicus C3S/CAMS License agreement](https://apps.ecmwf.int/datasets/licences/copernicus/): - 5.1.1 Where the Licensee communicates or distributes Copernicus...
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/ECMWF/ECMWF_ERA5_LAND_DAILY_AGGR.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_LAND_DAILY_AGGR#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/ECMWF/ECMWF_ERA5_LAND_DAILY_AGGR
+Preview image: https://developers.google.com/earth-engine/datasets/images/ECMWF/ECMWF_ERA5_LAND_DAILY_AGGR_sample.png
+
+Selection constraints:
+  - TODO
+Recommended preprocessing:
+  - TODO
+Warnings:
+  - TODO
+
+Key bands:
+  - dewpoint_temperature_2m (gsd=11132, unit=K): Temperature to which the air, at 2 meters above the surface of the Earth, would have to be cooled for saturation to occur. It is a measure of the humidity of the air. Combined w...
+  - temperature_2m (gsd=11132, unit=K): Temperature of air at 2m above the surface of land, sea or in-land waters. 2m temperature is calculated by interpolating between the lowest model level and the Earth's surface,...
+  - skin_temperature (gsd=11132, unit=K): Temperature of the surface of the Earth. The skin temperature is the theoretical temperature that is required to satisfy the surface energy balance. It represents the temperatur...
+  - soil_temperature_level_1 (gsd=11132, unit=K): Temperature of the soil in layer 1 (0 - 7 cm) of the ECMWF Integrated Forecasting System. The surface is at 0 cm. Soil temperature is set at the middle of each layer, and heat t...
+  - soil_temperature_level_2 (gsd=11132, unit=K): Temperature of the soil in layer 2 (7-28 cm) of the ECMWF Integrated Forecasting System.
+  - soil_temperature_level_3 (gsd=11132, unit=K): Temperature of the soil in layer 3 (28-100 cm) of the ECMWF Integrated Forecasting System.
+  - soil_temperature_level_4 (gsd=11132, unit=K): Temperature of the soil in layer 4 (100-289 cm) of the ECMWF Integrated Forecasting System.
+  - lake_bottom_temperature (gsd=11132, unit=K): Temperature of water at the bottom of inland water bodies (lakes, reservoirs, rivers) and coastal waters. ECMWF implemented a lake model in May 2015 to represent the water tempe...
+  - lake_ice_depth (gsd=11132, unit=m): The thickness of ice on inland water bodies (lakes, reservoirs and rivers) and coastal waters. The ECMWF Integrated Forecasting System (IFS) represents the formation and melting...
+  - lake_ice_temperature (gsd=11132, unit=K): The temperature of the uppermost surface of ice on inland water bodies (lakes, reservoirs, rivers) and coastal waters. The ECMWF Integrated Forecasting System represents the for...
+  - lake_mix_layer_depth (gsd=11132, unit=m): The thickness of the upper most layer of an inland water body (lake, reservoirs, and rivers) or coastal waters that is well mixed and has a near constant temperature with depth...
+  - lake_mix_layer_temperature (gsd=11132, unit=K): The temperature of the upper most layer of inland water bodies (lakes, reservoirs and rivers) or coastal waters) that is well mixed. The ECMWF Integrated Forecasting System repr...
+Key properties:
+  - day (INT): Calendar day
+  - month (INT): Calendar month
+  - year (INT): Calendar year
+===
+## NASA/GPM_L3/IMERG_V07
+Name: GPM: Global Precipitation Measurement (GPM) Release 07
+Asset ID: NASA/GPM_L3/IMERG_V07
+Type: ee.ImageCollection
+Status: ready
+Categories: precipitation
+Temporal coverage: 1998-01-01T00:00:00Z -> 2026-04-18T03:30:00Z
+Update frequency: 30 minute cadence
+Spatial bbox: [-180, -90, 180, 90]
+License: proprietary
+Providers: NASA GES DISC at NASA Goddard Space Flight Center, Google Earth Engine
+Keywords: climate, geophysical, gpm, half-hourly, imerg, jaxa, nasa, precipitation, weather
+Terms (short): All NASA-produced data from the GPM mission is made freely available for the public to use.
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/NASA/NASA_GPM_L3_IMERG_V07.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/NASA_GPM_L3_IMERG_V07#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/NASA/NASA_GPM_L3_IMERG_V07
+Preview image: https://developers.google.com/earth-engine/datasets/images/NASA/NASA_GPM_L3_IMERG_V07_sample.png
+
+Selection constraints:
+  - TODO
+Recommended preprocessing:
+  - TODO
+Warnings:
+  - TODO
+
+Key bands:
+  - MWobservationTime (gsd=11132, unit=min. into half hour): PMW source time
+  - MWprecipSource (gsd=11132): PMW source sensor identifier
+  - MWprecipitation (gsd=11132, unit=mm/hr): merged PMW precipitation
+  - IRinfluence (gsd=11132, unit=%): Kalman filter weight for IR
+  - IRprecipitation (gsd=11132, unit=mm/hr): IR precipitation
+  - precipitation (gsd=11132, unit=mm/hr): snapshot precipitation - calibrated
+  - precipitationUncal (gsd=11132, unit=mm/hr): snapshot precipitation - uncalibrated
+  - probabilityLiquidPrecipitation (gsd=11132, unit=%): probability of liquid precipitation phase
+  - randomError (gsd=11132, unit=mm/hr): calibrated-precipitation random error
+Key properties:
+  - (no gee:schema in STAC summaries)
+===
+## NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG
+Name: VIIRS Stray Light Corrected Nighttime Day/Night Band Composites Version 1
+Asset ID: NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG
+Type: ee.ImageCollection
+Status: ready
+Categories: population
+Temporal coverage: 2014-01-01T00:00:00Z -> 2026-03-01T00:00:00Z
+Update frequency: 1 month cadence
+Spatial bbox: [-180, -65, 180, 75]
+License: proprietary
+Providers: Earth Observation Group, Payne Institute for Public Policy, Colorado School of Mines, Google Earth Engine
+Keywords: dnb, eog, lights, monthly, nighttime, noaa, population, stray-light, viirs, visible
+Terms (short): Colorado School of Mines data, information, and products, regardless of the method of delivery, are not subject to copyright and carry no restrictions on their subsequent use by the public. Once obtained, they may be...
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/NOAA/NOAA_VIIRS_DNB_MONTHLY_V1_VCMSLCFG.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/NOAA_VIIRS_DNB_MONTHLY_V1_VCMSLCFG#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/NOAA/NOAA_VIIRS_DNB_MONTHLY_V1_VCMSLCFG
+Preview image: https://developers.google.com/earth-engine/datasets/images/NOAA/NOAA_VIIRS_DNB_MONTHLY_V1_VCMSLCFG_sample.png
+
+Selection constraints:
+  - TODO
+Recommended preprocessing:
+  - TODO
+Warnings:
+  - TODO
+
+Key bands:
+  - avg_rad (gsd=463.83, unit=nanoWatts/sr/cm^2): Average DNB radiance values.
+  - cf_cvg (gsd=463.83): Cloud-free coverages; the total number of observations that went into each pixel. This band can be used to identify areas with low numbers of observations where the quality is r...
+Key properties:
+  - (no gee:schema in STAC summaries)
+===
+## FAO/GAUL/2015/level0
+Name: FAO GAUL: Global Administrative Unit Layers 2015, Country Boundaries
+Asset ID: FAO/GAUL/2015/level0
+Type: ee.FeatureCollection
+Status: ready
+Categories: infrastructure-boundaries
+Temporal coverage: 2014-12-19T16:45:00Z -> 2014-12-19T16:45:00Z
+Update frequency: unknown
+Spatial bbox: [-180, -90, 180, 90]
+License: proprietary
+Providers: FAO UN, Google Earth Engine
+Keywords: borders, countries, fao, gaul, infrastructure-boundaries, table, un
+Terms (short): The GAUL dataset is distributed to the United Nations and other authorized international and national institutions/agencies. FAO grants a license to use, download and print the materials contained in the GAUL dataset...
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/FAO/FAO_GAUL_2015_level0.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/FAO_GAUL_2015_level0#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/FAO/FAO_GAUL_2015_level0
+Preview image: https://developers.google.com/earth-engine/datasets/images/FAO/FAO_GAUL_2015_level0_sample.png
+
+Selection constraints:
+  - TODO
+Recommended preprocessing:
+  - TODO
+Warnings:
+  - TODO
+
+Key bands:
+  - (no eo:bands in STAC summaries)
+Key properties:
+  - ADM0_CODE (INT): GAUL country code
+  - ADM0_NAME (STRING): UN country name
+  - DISP_AREA (STRING): Unsettled territory: 'Yes' or 'No'
+  - STATUS (STRING): Status of the country
+  - Shape_Area (DOUBLE): Shape area
+  - Shape_Leng (DOUBLE): Shape length
+  - EXP0_YEAR (INT): Expiry year of the administrative unit
+  - STR0_YEAR (INT): Creation year of the administrative unit
+===
+## FAO/GAUL/2015/level1
+Name: FAO GAUL: Global Administrative Unit Layers 2015, First-Level Administrative Units
+Asset ID: FAO/GAUL/2015/level1
+Type: ee.FeatureCollection
+Status: ready
+Categories: infrastructure-boundaries
+Temporal coverage: 2014-12-19T16:45:00Z -> 2014-12-19T16:45:00Z
+Update frequency: unknown
+Spatial bbox: [-180, -90, 180, 90]
+License: proprietary
+Providers: FAO UN, Google Earth Engine
+Keywords: borders, departments, fao, gaul, infrastructure-boundaries, provinces, states, table, un
+Terms (short): The GAUL dataset is distributed to the United Nations and other authorized international and national institutions/agencies. FAO grants a license to use, download and print the materials contained in the GAUL dataset...
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/FAO/FAO_GAUL_2015_level1.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/FAO_GAUL_2015_level1#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/FAO/FAO_GAUL_2015_level1
+Preview image: https://developers.google.com/earth-engine/datasets/images/FAO/FAO_GAUL_2015_level1_sample.png
+
+Selection constraints:
+  - TODO
+Recommended preprocessing:
+  - TODO
+Warnings:
+  - TODO
+
+Key bands:
+  - (no eo:bands in STAC summaries)
+Key properties:
+  - ADM0_CODE (INT): GAUL country code
+  - ADM0_NAME (STRING): UN country name
+  - DISP_AREA (STRING): Unsettled territory: 'Yes' or 'No'
+  - STATUS (STRING): Status of the country
+  - Shape_Area (DOUBLE): Shape area
+  - Shape_Leng (DOUBLE): Shape length
+  - ADM1_CODE (INT): GAUL code of administrative units at first level
+  - ADM1_NAME (STRING): Name of administrative units at first level
+  - EXP1_YEAR (INT): Expiry year of the administrative unit
+  - STR1_YEAR (INT): Creation year of the administrative unit
+===
+## FAO/GAUL/2015/level2
+Name: FAO GAUL: Global Administrative Unit Layers 2015, Second-Level Administrative Units
+Asset ID: FAO/GAUL/2015/level2
+Type: ee.FeatureCollection
+Status: ready
+Categories: infrastructure-boundaries
+Temporal coverage: 2014-12-19T16:45:00Z -> 2014-12-19T16:45:00Z
+Update frequency: unknown
+Spatial bbox: [-180, -90, 180, 90]
+License: proprietary
+Providers: FAO UN, Google Earth Engine
+Keywords: borders, county, districts, fao, gaul, infrastructure-boundaries, table, un
+Terms (short): The GAUL dataset is distributed to the United Nations and other authorized international and national institutions/agencies. FAO grants a license to use, download and print the materials contained in the GAUL dataset...
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/FAO/FAO_GAUL_2015_level2.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/FAO_GAUL_2015_level2#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/FAO/FAO_GAUL_2015_level2
+Preview image: https://developers.google.com/earth-engine/datasets/images/FAO/FAO_GAUL_2015_level2_sample.png
+
+Selection constraints:
+  - TODO
+Recommended preprocessing:
+  - TODO
+Warnings:
+  - TODO
+
+Key bands:
+  - (no eo:bands in STAC summaries)
+Key properties:
+  - ADM0_CODE (INT): GAUL country code
+  - ADM0_NAME (STRING): UN country name
+  - DISP_AREA (STRING): Unsettled territory: 'Yes' or 'No'
+  - STATUS (STRING): Status of the country
+  - Shape_Area (DOUBLE): Shape area
+  - Shape_Leng (DOUBLE): Shape length
+  - ADM1_CODE (INT): GAUL code of administrative units at first level
+  - ADM1_NAME (STRING): Name of administrative units at first level
+  - ADM2_CODE (INT): GAUL code of administrative units at second level
+  - ADM2_NAME (STRING): Name of administrative units at second level
+  - EXP2_YEAR (INT): Expiry year of the administrative unit
+  - STR2_YEAR (INT): Creation year of the administrative unit
+===
+## USDOS/LSIB/2017
+Name: LSIB 2017: Large Scale International Boundary Polygons, Detailed
+Asset ID: USDOS/LSIB/2017
+Type: ee.FeatureCollection
+Status: ready
+Categories: infrastructure-boundaries
+Temporal coverage: 2017-12-29T00:00:00Z -> 2017-12-29T00:00:00Z
+Update frequency: unknown
+Spatial bbox: [-180, -90, 180, 90]
+License: proprietary
+Providers: United States Department of State, Office of the Geographer, Google Earth Engine
+Keywords: borders, countries, dos, infrastructure-boundaries, political, table, usdos
+Terms (short): There are no restrictions on use of this US public domain data.
+STAC item: https://storage.googleapis.com/earthengine-stac/catalog/USDOS/USDOS_LSIB_2017.json
+Dataset page: https://developers.google.com/earth-engine/datasets/catalog/USDOS_LSIB_2017#terms-of-use
+Code Editor example: https://code.earthengine.google.com/?scriptPath=Examples:Datasets/USDOS/USDOS_LSIB_2017
+Preview image: https://developers.google.com/earth-engine/datasets/images/USDOS/USDOS_LSIB_2017_sample.png
+
+Selection constraints:
+  - TODO
+Recommended preprocessing:
+  - TODO
+Warnings:
+  - TODO
+
+Key bands:
+  - (no eo:bands in STAC summaries)
+Key properties:
+  - OBJECTID (STRING): Object ID
+  - COUNTRY_NA (STRING): US-recognized country name
+===

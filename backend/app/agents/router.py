@@ -36,9 +36,10 @@ _GEO_PATTERN = re.compile(
 
 _EXEC_PATTERN = re.compile(
     r"load|加载|execute|执行|visualize|可视化|explore|分析|compute|计算|plot"
-    r"|show\b|显示|map\b|地图|asset\b|dataset|数据集|run\b|运行"
+    r"|生成|制作|提取|获取|show\b|显示|map\b|地图|asset\b|dataset|数据集|run\b|运行"
     r"|count\b|计数|area\b|面积|boundary|边界|vector|raster|image\b"
-    r"|ndvi|elevation|高程|classify|分类|export|导出",
+    r"|imagery|remote\s*sensing|remotesensing|遥感|影像|sentinel|s2|landsat|mosaic"
+    r"|ndvi|ndbi|ndwi|mndwi|ndmi|nbr|evi|savi|bsi|lai|elevation|高程|classify|分类|export|导出",
     re.IGNORECASE,
 )
 

@@ -5,7 +5,7 @@ import streamlit as st
 st.markdown(
     """
     <style>
-    header[data-testid="stHeader"]   { display: none !important; }
+    /* 保留 Streamlit header，确保 Stop 按钮可见 */
     footer                           { display: none !important; }
     section[data-testid="stMain"] > div.block-container {
         padding: 0 !important;
@@ -45,20 +45,24 @@ def _render_assistant_message(msg: dict) -> None:
                         st.code(code, language="python")
     st.markdown(msg["content"])
 
+
 # ── Session state 初始化 ───────────────────────────────────────────────────────
 config = get_basemap_config()
+
 
 def _init(key, val):
     if key not in st.session_state:
         st.session_state[key] = val
 
+
 _init("map_center_lat", config.get("center_lat", 22.3193))
 _init("map_center_lon", config.get("center_lon", 114.1694))
-_init("map_zoom",       config.get("zoom", 10))
-_init("map_layers",     [])
-_init("messages",       [])
-_init("history",        [])
-_init("session_id",     str(uuid.uuid4()))
+_init("map_zoom", config.get("zoom", 10))
+_init("map_bbox", config.get("bbox"))
+_init("map_layers", [])
+_init("messages", [])
+_init("history", [])
+_init("session_id", str(uuid.uuid4()))
 
 
 def _apply_map_update(update: dict) -> None:
@@ -66,7 +70,9 @@ def _apply_map_update(update: dict) -> None:
         return
     st.session_state["map_center_lat"] = update.get("center_lat", st.session_state["map_center_lat"])
     st.session_state["map_center_lon"] = update.get("center_lon", st.session_state["map_center_lon"])
-    st.session_state["map_zoom"]        = update.get("zoom",       st.session_state["map_zoom"])
+    st.session_state["map_zoom"] = update.get("zoom", st.session_state["map_zoom"])
+    if update.get("bbox"):
+        st.session_state["map_bbox"] = update["bbox"]
     if update.get("layers"):
         st.session_state["map_layers"] = update["layers"]
     elif update.get("layer_info"):
@@ -86,6 +92,7 @@ def _save_to_history():
     save_history(st.session_state["session_id"], msgs)
     st.session_state["messages"] = []
     st.session_state["map_layers"] = []
+    st.session_state["map_bbox"] = None
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
@@ -117,7 +124,7 @@ with st.sidebar:
             with messages_container:
                 with st.chat_message("assistant"):
                     status_placeholder = st.empty()
-                    reply_placeholder  = st.empty()
+                    reply_placeholder = st.empty()
 
                     try:
                         # st.status 在 running 状态时立即可见，expand=True 展示细节
@@ -128,7 +135,8 @@ with st.sidebar:
                                 map_context={
                                     "center_lat": st.session_state["map_center_lat"],
                                     "center_lon": st.session_state["map_center_lon"],
-                                    "zoom":       st.session_state["map_zoom"],
+                                    "zoom": st.session_state["map_zoom"],
+                                    "bbox": st.session_state.get("map_bbox"),
                                 },
                             ):
                                 etype = evt.get("type")
@@ -158,7 +166,7 @@ with st.sidebar:
                                     idx = edata.get("index", 0)
                                     desc = edata.get("description", "")
                                     tool = edata.get("tool", "")
-                                    ok   = edata.get("success", False)
+                                    ok = edata.get("success", False)
                                     icon = "✅" if ok else "❌"
                                     preview = (edata.get("output_preview") or "").strip()
                                     code = (edata.get("code") or "").strip()
@@ -206,11 +214,13 @@ with st.sidebar:
                         "steps_total": len(collected_steps),
                         "steps": collected_steps,
                     }
-                st.session_state["messages"].append({
-                    "role": "assistant",
-                    "content": final_resp.get("reply", ""),
-                    "workflow_status": ws,
-                })
+                st.session_state["messages"].append(
+                    {
+                        "role": "assistant",
+                        "content": final_resp.get("reply", ""),
+                        "workflow_status": ws,
+                    }
+                )
                 _apply_map_update(final_resp.get("map_update"))
                 st.rerun()
 
@@ -241,5 +251,6 @@ render_map(
     center_lon=st.session_state["map_center_lon"],
     zoom=st.session_state["map_zoom"],
     layers=st.session_state["map_layers"],
+    bbox=st.session_state.get("map_bbox"),
     height=900,
 )

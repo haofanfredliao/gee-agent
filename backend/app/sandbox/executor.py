@@ -47,7 +47,12 @@ class _MockMap:
             url = map_id.get("tile_fetcher").url_format if map_id else None
             if url:
                 self.tile_url = url
-                self.layers.append({"name": name or "layer", "tile_url": url})
+                self.layers.append({
+                    "name": name or "layer",
+                    "tile_url": url,
+                    "opacity": opacity,
+                    "vis_params": vis_params or {},
+                })
         except AttributeError:
             # ee_object 不是 Image（如 FeatureCollection/Feature），用 paint 转换后再取 tile
             try:
@@ -63,7 +68,12 @@ class _MockMap:
                 url = map_id.get("tile_fetcher").url_format if map_id else None
                 if url:
                     self.tile_url = url
-                    self.layers.append({"name": name or "layer", "tile_url": url})
+                    self.layers.append({
+                        "name": name or "layer",
+                        "tile_url": url,
+                        "opacity": opacity,
+                        "vis_params": paint_vis,
+                    })
             except Exception as err2:
                 print(f"[Map.addLayer error] {err2}")
         except Exception as err:
@@ -76,7 +86,7 @@ class _MockMap:
         pass
 
 
-def run(code: str, gee_module: Any) -> Dict[str, Any]:
+def run(code: str, gee_module: Any, aoi_boundary_path: Optional[str] = None) -> Dict[str, Any]:
     """
     在受控沙箱中执行 GEE 代码片段。
 
@@ -113,8 +123,26 @@ def run(code: str, gee_module: Any) -> Dict[str, Any]:
     old_stdout = sys.stdout
     sys.stdout = captured
 
-    # 2. 隔离命名空间：只预置 ee 和 Map
-    global_env: Dict[str, Any] = {"ee": gee_module, "Map": mock_map}
+    # 2. 隔离命名空间：只预置 ee、Map 和受控 helper
+    from backend.app.tools.geo.osm_boundary import (
+        load_cached_boundary_fc,
+        load_hong_kong_osm_boundary_fc,
+    )
+
+    def _load_aoi_boundary() -> Any:
+        if not aoi_boundary_path:
+            raise FileNotFoundError(
+                "No AOI boundary cache was prepared for this execution. "
+                "The backend should resolve the place name before generated code calls load_aoi_boundary()."
+            )
+        return load_cached_boundary_fc(gee_module, aoi_boundary_path)
+
+    global_env: Dict[str, Any] = {
+        "ee": gee_module,
+        "Map": mock_map,
+        "load_aoi_boundary": _load_aoi_boundary,
+        "osm_hk_boundary": lambda: load_hong_kong_osm_boundary_fc(gee_module),
+    }
 
     try:
         exec(code, global_env, global_env)  # nosec B102

@@ -9,6 +9,7 @@ class MapContext(BaseModel):
     center_lat: Optional[float] = None
     center_lon: Optional[float] = None
     zoom: Optional[int] = None
+    bbox: Optional[List[float]] = None
 
 
 class MapUpdate(BaseModel):
@@ -16,7 +17,9 @@ class MapUpdate(BaseModel):
     center_lat: float
     center_lon: float
     zoom: int
+    bbox: Optional[List[float]] = None
     layer_info: Optional[Dict[str, Any]] = None
+    layers: Optional[List[Dict[str, Any]]] = None
 
 
 class ChatRequest(BaseModel):

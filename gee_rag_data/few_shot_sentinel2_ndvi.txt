@@ -1,0 +1,70 @@
+## FEW_SHOT: Sentinel-2 AOI NDVI with Cached Boundary
+
+Intent: execution
+Keywords: Sentinel-2, NDVI, AOI boundary, cached OSM boundary, detailed clip, vegetation, B8, B4
+
+User task pattern:
+"用 Sentinel-2 给某个 AOI 计算 NDVI，并按真实边界裁剪"
+
+Critical rules (must follow):
+1) Use this pattern only when the user explicitly asks for NDVI.
+2) Sentinel-2 SR must use ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED").
+3) AOI must use a real boundary from backend cache via `load_aoi_boundary()`.
+   Do not query OSM/Nominatim/Overpass inside generated code.
+4) NDVI = normalizedDifference(["B8", "B4"]).rename("NDVI").
+5) NDVI visualization must use NDVI parameters, e.g. min=-0.2, max=0.8 and an NDVI palette.
+6) Do not use true-color visualization parameters for NDVI.
+7) Do not force image projection for map display.
+
+Positive ReAct trajectory:
+- Observe:
+  - 从 query 中识别数据源 → 查 Dataset profile 拿 cloud_property / rgb_bands / vis_range / scale_factor。
+  - 识别 AOI：若上下文提示已准备 AOI 边界缓存，直接 `aoi_fc = load_aoi_boundary()`；不要写死香港，不要在代码中联网查 OSM。
+  - 识别时间：年份 "2022" → "2022-01-01" ~ "2023-01-01"。
+- Think:
+  - 候选集：`filterBounds + filterDate + sort(cloud_property) + limit(30)`。
+  - 每个候选日期用 **纯几何** intersection 算覆盖率（严禁像素级 reduceRegion）。
+  - coverage >= 99.9 → sort(cloud 升序) → 取第一；否则 fallback 到覆盖率最高那天。
+- Act:
+  - 用最佳日期对应的当天 scenes（从原集合重取，不受 limit 影响）→ mosaic。
+  - Landsat 乘 scale_factor，S2 原样。
+  - `.clipToCollection(aoi_fc)` 后 Map.addLayer，print 所有元信息。
+
+
+Reference Python snippet:
+```python
+import ee
+
+start = "2022-01-01"
+end = "2023-01-01"
+
+aoi_fc = load_aoi_boundary()
+boundary_source = "Cached OpenStreetMap boundary via load_aoi_boundary()"
+aoi = aoi_fc.geometry()
+
+s2_base = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+    .filterBounds(aoi)
+    .filterDate(start, end)
+    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40)))
+
+s2_candidates = s2_base.sort("CLOUDY_PIXEL_PERCENTAGE").limit(80)
+mosaic = s2_candidates.limit(20).mosaic().clipToCollection(aoi_fc)
+
+ndvi = (mosaic.normalizedDifference(["B8", "B4"])
+    .rename("NDVI")
+    .clamp(-1, 1)
+    .updateMask(mosaic.select("B8").gt(0)))
+
+print("Candidate count:", s2_candidates.size().getInfo())
+if isinstance(boundary_source, str):
+    print("Boundary source:", boundary_source)
+else:
+    print("Boundary source:", boundary_source.getInfo())
+print("Boundary names:", aoi_fc.aggregate_array("display_name").distinct().getInfo())
+
+Map.addLayer(
+    ndvi,
+    {"min": -0.2, "max": 0.8, "palette": ["#8c510a", "#d8b365", "#f6e8c3", "#c7eae5", "#5ab4ac", "#01665e"]},
+    "Sentinel-2 AOI NDVI"
+)
+```
