@@ -1,0 +1,85 @@
+## FEW_SHOT: Landsat 8 C2 L2 Land Surface Temperature (Celsius)
+
+Intent: execution
+Task type: temperature inversion
+Keywords: LANDSAT/LC08/C02/T1_L2, ST_B10, LST, Celsius, Kelvin, scale factor, offset, reduceRegion
+
+User task pattern:
+"Use LANDSAT/LC08/C02/T1_L2 to retrieve an image and compute land surface temperature (LST) in Celsius."
+
+Assets in this case:
+- Image collection: LANDSAT/LC08/C02/T1_L2
+- Project ID: ee-hku-geog7310
+
+Critical rules (must follow):
+1) Always apply Landsat 8 C2 L2 thermal scale conversion before using ST_B10.
+   - Kelvin = ST_B10 * 0.00341802 + 149.0
+   - Celsius = Kelvin - 273.15
+2) Do not treat raw ST_B10 DN as physical temperature.
+   - ST_B10 in this dataset is scaled integer, not direct Kelvin/Celsius.
+3) Use an L2 surface-temperature scene.
+   - Prefer filtering by PROCESSING_LEVEL = "L2SP" before selecting the image.
+4) Keep computation server-side and only materialize final small outputs.
+   - Build image math first, then call getInfo() on final scalar results.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect collection id and thermal band name ST_B10
+  - inspect whether selected image is L2SP and note nominal scale
+- Think:
+  - define explicit conversion path DN -> Kelvin -> Celsius
+  - ensure outputs are from converted band instead of raw ST_B10
+- Act:
+  - filter collection by AOI/date and select one image
+  - convert ST_B10 with scale factor and offset
+  - reduce region for mean LST and print Celsius result
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+ee.Initialize(project="ee-hku-geog7310")
+
+aoi = ee.Geometry.Point([114.1694, 22.3193]).buffer(2000)
+
+image = (
+    ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+    .filterBounds(aoi)
+    .filterDate("2021-01-01", "2021-12-31")
+    .filter(ee.Filter.eq("PROCESSING_LEVEL", "L2SP"))
+    .sort("CLOUD_COVER")
+    .first()
+)
+
+st_scale = ee.Number(0.00341802)
+st_offset = ee.Number(149.0)
+
+# DN -> Kelvin -> Celsius
+lst_c = (
+    image.select("ST_B10")
+    .multiply(st_scale)
+    .add(st_offset)
+    .subtract(273.15)
+    .rename("LST_C")
+)
+
+mean_c = lst_c.reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=aoi,
+    scale=30,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("LST_C")
+
+print("Mean LST (C):", ee.Number(mean_c).getInfo())
+```
+
+Anti-patterns to avoid:
+- Using ST_B10 directly as Celsius without scale/offset conversion.
+- Applying only one step (e.g., multiply scale factor but forgetting offset).
+- Converting to Kelvin but forgetting Kelvin-to-Celsius subtraction (273.15).
+- Running reduceRegion on raw ST_B10 and reporting it as temperature.
+
+Expected behavior for this pattern:
+- The final reported LST is in Celsius and within a physically plausible range for the selected AOI/date.
+===
