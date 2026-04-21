@@ -395,3 +395,80 @@ Anti-patterns to avoid:
 Expected behavior for this pattern:
 - The workflow yields stable pre/post dB statistics and demonstrates the correct linear-domain speckle filtering pipeline.
 ===
+
+## FEW_SHOT: Nighttime Light Dynamics for Socio-economic Activity (Case 6)
+
+Intent: execution
+Task type: socio-economic proxy modeling
+Keywords: VIIRS, NTL, log1p, Economic Proxy, Socio-economic, NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG
+
+User task pattern:
+"Use VIIRS nighttime light monthly composites to analyze 2023 urban activity in Hong Kong and report mean radiance after logarithmic transformation."
+
+Assets in this case:
+- Image collection: NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG
+- Project ID: ee-hku-geog7310
+
+Critical rules (must follow):
+1) Use the radiance band explicitly.
+   - Select avg_rad before temporal aggregation.
+2) Apply logarithmic transform before regional summary.
+   - Nighttime light radiance is typically right-skewed; log1p-style transform helps stabilize distribution and reduce dominance of bright outliers.
+   - In Earth Engine Python API, use ln(1 + x) via image.add(1).log() as log1p equivalent.
+3) Use native-like analysis scale for VIIRS.
+   - Set scale=500 for reduceRegion to match VIIRS monthly product resolution convention in this workflow.
+4) Keep temporal semantics explicit.
+   - Filter target period first (e.g., 2023), then aggregate monthly images with .mean().
+5) Respect Earth Engine lazy execution.
+   - Keep image operations server-side and call getInfo() only on final scalar outputs.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect dataset id, target band avg_rad, and available monthly images for 2023
+  - verify AOI and intended output metric (mean radiance)
+- Think:
+  - map requirement "log1p + mean radiance" to sequence: temporal mean -> log transform -> reduceRegion mean
+  - ensure transform is applied before final AOI summary
+- Act:
+  - filter VIIRS collection by AOI and 2023 date range
+  - compute annual mean radiance image from monthly composites
+  - apply log1p-equivalent transform and print Mean Radiance scalar
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+ee.Initialize(project="ee-hku-geog7310")
+
+aoi = ee.Geometry.Point([114.1694, 22.3193]).buffer(5000)
+
+viirs_2023 = (
+    ee.ImageCollection("NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG")
+    .filterBounds(aoi)
+    .filterDate("2023-01-01", "2024-01-01")
+    .select("avg_rad")
+)
+
+avg_rad_2023 = viirs_2023.mean().rename("avg_rad_mean")
+log_rad_2023 = avg_rad_2023.add(1).log().rename("log1p_avg_rad")
+
+mean_radiance = log_rad_2023.reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=aoi,
+    scale=500,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("log1p_avg_rad")
+
+print("Mean Radiance (log1p avg_rad):", ee.Number(mean_radiance).getInfo())
+```
+
+Anti-patterns to avoid:
+- Running reduceRegion directly on raw avg_rad without logarithmic transformation for skewed-light analyses.
+- Using inconsistent scale far from VIIRS convention, causing unstable or non-comparable summaries.
+- Applying getInfo() repeatedly to intermediate images/collections.
+- Mixing months outside the target period when the task is year-specific.
+
+Expected behavior for this pattern:
+- The output is a stable AOI-level 2023 mean nighttime-light radiance metric after log1p-style transformation, suitable as an economic activity proxy.
+===
