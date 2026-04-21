@@ -550,3 +550,91 @@ Anti-patterns to avoid:
 Expected behavior for this pattern:
 - The output is an AOI-level annual vegetation productivity estimate with physically interpretable magnitude after proper scale conversion and temporal accumulation.
 ===
+
+## FEW_SHOT: Flood Disaster Change Detection with Sentinel-1 (Case 8)
+
+Intent: execution
+Task type: flood change detection
+Keywords: COPERNICUS/S1_GRD, change detection, flood mapping, pre/post event, dB to Linear, VV, ASCENDING
+
+User task pattern:
+"Detect potential flood-affected area by comparing pre-event and post-event Sentinel-1 SAR backscatter over Hong Kong."
+
+Assets in this case:
+- Image collection: COPERNICUS/S1_GRD
+- Project ID: ee-hku-geog7310
+
+Critical rules (must follow):
+1) Keep acquisition geometry consistent for pre/post comparison.
+   - Use the same orbit direction (ASCENDING or DESCENDING), mode (IW), and polarization (VV or VH).
+   - Do not mix passes between pre and post stacks.
+2) Perform ratio/change logic in linear domain.
+   - Convert dB to linear first, then compute post/pre ratio.
+   - Thresholding directly on dB ratio logic is physically inconsistent.
+3) Use robust temporal compositing for each period.
+   - Build pre-event and post-event composites (e.g., median) to reduce speckle/noise sensitivity.
+4) Convert flood mask to area using pixelArea.
+   - area_km2 = sum(pixelArea on flood mask) / 1e6
+5) Keep thresholds explicit and interpretable.
+   - Example: post/pre < 0.7 and post dB < -15 as a simple flood proxy baseline.
+6) Respect Earth Engine lazy execution.
+   - Keep all transforms server-side and call getInfo() only for final summary statistics.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect available Sentinel-1 scenes for target date windows
+  - confirm orbit/mode/polarization consistency
+- Think:
+  - design pre/post composite strategy and change metric in linear domain
+  - include both relative drop (ratio) and absolute low-backscatter condition
+- Act:
+  - build pre/post median composites
+  - convert to linear, compute ratio, derive flood mask
+  - compute pre/post mean dB and flood area for closed-loop reporting
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+ee.Initialize(project="ee-hku-geog7310")
+
+aoi = ee.Geometry.Point([114.1694, 22.3193]).buffer(15000)
+
+s1 = (
+    ee.ImageCollection("COPERNICUS/S1_GRD")
+    .filterBounds(aoi)
+    .filter(ee.Filter.eq("instrumentMode", "IW"))
+    .filter(ee.Filter.eq("orbitProperties_pass", "ASCENDING"))
+    .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
+    .select("VV")
+)
+
+pre = s1.filterDate("2023-08-01", "2023-09-01").median().rename("pre_vv_db")
+post = s1.filterDate("2023-09-01", "2023-10-01").median().rename("post_vv_db")
+
+pre_linear = ee.Image(10).pow(pre.divide(10.0))
+post_linear = ee.Image(10).pow(post.divide(10.0))
+
+ratio = post_linear.divide(pre_linear)
+flood_mask = ratio.lt(0.7).And(post.lt(-15)).rename("flood_mask")
+
+flood_area_km2 = ee.Image.pixelArea().updateMask(flood_mask).reduceRegion(
+    reducer=ee.Reducer.sum(),
+    geometry=aoi,
+    scale=10,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("area")
+
+print("Estimated flood area (km^2):", ee.Number(flood_area_km2).divide(1e6).getInfo())
+```
+
+Anti-patterns to avoid:
+- Mixing ASCENDING and DESCENDING scenes between pre and post composites.
+- Using mean() on raw noisy single-date SAR scenes without temporal compositing.
+- Computing post/pre ratio directly in dB domain.
+- Reporting flood extent without converting mask to physical area.
+
+Expected behavior for this pattern:
+- The pipeline outputs interpretable pre/post backscatter summaries and an estimated flood-affected area, suitable for rapid disaster change screening.
+===
