@@ -83,3 +83,75 @@ Anti-patterns to avoid:
 Expected behavior for this pattern:
 - The final reported LST is in Celsius and within a physically plausible range for the selected AOI/date.
 ===
+
+## FEW_SHOT: CHIRPS Daily to Annual Precipitation Time-Series (Case 2)
+
+Intent: execution
+Task type: climate time-series aggregation
+Keywords: UCSB-CHG/CHIRPS/DAILY, precipitation, time-series, annual sum, reduceRegion, mean precipitation, AOI
+
+User task pattern:
+"Use CHIRPS daily precipitation data to compute annual total precipitation for 2022 and report the mean annual precipitation over an AOI."
+
+Assets in this case:
+- Image collection: UCSB-CHG/CHIRPS/DAILY
+- Project ID: ee-hku-geog7310
+
+Critical rules (must follow):
+1) Use correct time filtering for the target year.
+   - For year 2022, use start="2022-01-01" and end="2023-01-01" (end-exclusive).
+2) Aggregate daily precipitation with .sum() to build annual total precipitation.
+   - Do not use .mean() when the task asks for annual total.
+3) Use reduceRegion on the annual precipitation image to get AOI summary value.
+   - The output should be a scalar precipitation value in millimeters.
+4) Respect Earth Engine lazy execution.
+   - Keep operations server-side and only call getInfo() for final outputs.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect collection id and confirm daily precipitation band availability
+  - inspect image count after date/AOI filtering
+- Think:
+  - map task requirement to daily->annual aggregation via .sum()
+  - separate two objectives: annual total image and AOI mean scalar
+- Act:
+  - filter CHIRPS collection by AOI and year 2022
+  - compute annual precipitation image via .sum()
+  - compute AOI mean annual precipitation using reduceRegion and print final value
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+ee.Initialize(project="ee-hku-geog7310")
+
+aoi = ee.Geometry.Point([114.1694, 22.3193]).buffer(2000)
+
+chirps_2022 = (
+    ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY")
+    .filterBounds(aoi)
+    .filterDate("2022-01-01", "2023-01-01")
+)
+
+annual_precip = chirps_2022.sum().rename("annual_precip_mm")
+
+mean_annual_precip = annual_precip.reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=aoi,
+    scale=5566,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("annual_precip_mm")
+
+print("Mean annual precipitation (mm):", ee.Number(mean_annual_precip).getInfo())
+```
+
+Anti-patterns to avoid:
+- Using .mean() over the daily collection when the target output is annual total precipitation.
+- Filtering year range incorrectly (e.g., using end date "2022-12-31" and missing boundary handling).
+- Calling reduceRegion on a single daily image instead of the annual summed image.
+- Materializing intermediate large objects with unnecessary getInfo() calls.
+
+Expected behavior for this pattern:
+- The printed precipitation value is an AOI-level annual mean (mm) derived from summed 2022 daily CHIRPS data.
+===
