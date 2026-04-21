@@ -232,3 +232,74 @@ Anti-patterns to avoid:
 Expected behavior for this pattern:
 - The output is a single AOI-level 2023 mean 2m air temperature value in Celsius, within a climatologically plausible range.
 ===
+
+## FEW_SHOT: Land Cover Zonal Statistics with Pixel Proportion (Case 4)
+
+Intent: execution
+Task type: categorical zonal statistics
+Keywords: ESA/WorldCover/v100, frequencyHistogram, zonal statistics, land cover classification, pixel proportion
+
+User task pattern:
+"Use ESA WorldCover data to count land-cover classes within an AOI and compute each class percentage."
+
+Assets in this case:
+- Image collection: ESA/WorldCover/v100
+- Project ID: ee-hku-geog7310
+
+Critical rules (must follow):
+1) Treat land-cover class codes as categorical (discrete) data.
+   - Never use .mean() to summarize class labels.
+   - Must use ee.Reducer.frequencyHistogram() for class-count statistics.
+2) Use dataset-native scale for zonal statistics.
+   - ESA WorldCover v100 native resolution is 10 m, so set scale=10.
+3) Compute percentage from class counts explicitly.
+   - total_pixels = sum(all class counts)
+   - class_percentage = class_count / total_pixels * 100
+4) Keep server-side processing and only materialize final compact outputs.
+   - Run reduceRegion first, then convert histogram dictionary for reporting.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect dataset id and classification band (Map)
+  - confirm AOI geometry and required native scale
+- Think:
+  - map task to histogram-based counts for categorical raster
+  - design post-processing: class_count -> percentage
+- Act:
+  - load WorldCover image and reduce with frequencyHistogram
+  - extract class-count dictionary
+  - compute total and class percentages, then print results
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+ee.Initialize(project="ee-hku-geog7310")
+
+image = ee.ImageCollection("ESA/WorldCover/v100").first()
+aoi = ee.Geometry.Point([114.1397, 22.2830]).buffer(2000)
+
+hist = image.select("Map").reduceRegion(
+    reducer=ee.Reducer.frequencyHistogram(),
+    geometry=aoi,
+    scale=10,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("Map")
+
+hist_dict = ee.Dictionary(hist).getInfo()
+total = sum(hist_dict.values())
+percent_dict = {k: (v / total) * 100 for k, v in hist_dict.items()}
+
+print("Class histogram:", hist_dict)
+print("Class percentage (%):", percent_dict)
+```
+
+Anti-patterns to avoid:
+- Using reducer.mean() on class-code band and treating the result as land-cover composition.
+- Running histogram at coarse scale (e.g., 30 m or 1000 m) when 10 m detail is required.
+- Reporting class counts without normalizing to percentages when task asks for "占比分析".
+
+Expected behavior for this pattern:
+- The output includes class-count dictionary and percentage dictionary, enabling categorical composition analysis for the AOI.
+===
