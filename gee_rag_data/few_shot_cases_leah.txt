@@ -155,3 +155,80 @@ Anti-patterns to avoid:
 Expected behavior for this pattern:
 - The printed precipitation value is an AOI-level annual mean (mm) derived from summed 2022 daily CHIRPS data.
 ===
+
+## FEW_SHOT: ERA5-Land 2m Air Temperature Time-Series Mean (Case 3)
+
+Intent: execution
+Task type: climate time-series averaging
+Keywords: ECMWF/ERA5_LAND/MONTHLY_BY_HOUR, temperature_2m, Kelvin, Celsius, mean, reduceRegion, AOI, time-series
+
+User task pattern:
+"Use ERA5-Land monthly data to compute the average 2m air temperature over Hong Kong in 2023, and report the final value in Celsius."
+
+Assets in this case:
+- Image collection: ECMWF/ERA5_LAND/MONTHLY_BY_HOUR
+- Project ID: ee-hku-geog7310
+
+Critical rules (must follow):
+1) Select the correct variable band before aggregation.
+   - Use .select("temperature_2m") to avoid mixing unrelated meteorological bands.
+2) Convert units from Kelvin to Celsius before computing final metric.
+   - Celsius = Kelvin - 273.15
+3) Distinguish Sum vs Mean based on task semantics.
+   - Temperature over time should use .mean(), not .sum().
+   - Sum is for accumulative variables (e.g., precipitation), not for instantaneous/state variables like temperature.
+4) Compute AOI scalar with reduceRegion on the period-aggregated image.
+   - First build mean temperature image for the target period, then reduce to a scalar.
+5) Respect Earth Engine lazy execution.
+   - Keep transformations server-side; call getInfo() only on final numeric outputs.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect dataset id, target band (temperature_2m), and time window
+  - inspect image count after filtering and nominal scale
+- Think:
+  - determine conversion pipeline Kelvin -> Celsius before time aggregation
+  - map requirement "average temperature" to .mean() rather than .sum()
+- Act:
+  - filter 2023 images and select temperature_2m
+  - convert each image to Celsius and aggregate with .mean()
+  - run reduceRegion over AOI and print final Celsius value
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+ee.Initialize(project="ee-hku-geog7310")
+
+aoi = ee.Geometry.Point([114.1694, 22.3193]).buffer(5000)
+
+era5_2023 = (
+    ee.ImageCollection("ECMWF/ERA5_LAND/MONTHLY_BY_HOUR")
+    .filterBounds(aoi)
+    .filterDate("2023-01-01", "2024-01-01")
+    .select("temperature_2m")
+)
+
+era5_2023_c = era5_2023.map(lambda img: img.subtract(273.15).rename("temperature_2m_c"))
+mean_temp_image = era5_2023_c.mean().rename("mean_temperature_2m_c")
+
+mean_temp_c = mean_temp_image.reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=aoi,
+    scale=11132,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("mean_temperature_2m_c")
+
+print("Mean air temperature 2m (C):", ee.Number(mean_temp_c).getInfo())
+```
+
+Anti-patterns to avoid:
+- Aggregating temperature with .sum() across months and treating it as physical average temperature.
+- Forgetting Kelvin-to-Celsius conversion and directly reporting Kelvin values as Celsius.
+- Reducing over the full unfiltered collection instead of the specified year range.
+- Calling getInfo() repeatedly on intermediate collections/images.
+
+Expected behavior for this pattern:
+- The output is a single AOI-level 2023 mean 2m air temperature value in Celsius, within a climatologically plausible range.
+===
