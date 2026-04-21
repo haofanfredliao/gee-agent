@@ -127,6 +127,7 @@ ee.Initialize(project="ee-hku-geog7310")
 
 aoi = ee.Geometry.Point([114.1694, 22.3193]).buffer(2000)
 
+
 chirps_2022 = (
     ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY")
     .filterBounds(aoi)
@@ -302,4 +303,95 @@ Anti-patterns to avoid:
 
 Expected behavior for this pattern:
 - The output includes class-count dictionary and percentage dictionary, enabling categorical composition analysis for the AOI.
+===
+
+## FEW_SHOT: Sentinel-1 SAR Preprocessing and Speckle Filtering (Case 5)
+
+Intent: execution
+Task type: SAR denoising preprocessing
+Keywords: COPERNICUS/S1_GRD, Speckle Filter, dB to Linear, VV/VH, ASCENDING, DESCENDING
+
+User task pattern:
+"Use Sentinel-1 GRD to preprocess SAR backscatter and apply speckle filtering correctly, then compare values before and after filtering."
+
+Assets in this case:
+- Image collection: COPERNICUS/S1_GRD
+- Project ID: ee-hku-geog7310
+
+Critical rules (must follow):
+1) Keep orbit direction consistent for analysis.
+   - Explicitly filter either ASCENDING or DESCENDING.
+   - Do not mix ascending/descending passes in one composite unless task explicitly requires it.
+2) Keep acquisition mode and polarization explicit.
+   - Use instrumentMode = "IW" and target polarization band (e.g., VV or VH) from inspected metadata.
+3) Speckle filtering must be performed in linear scale.
+   - Correct sequence: dB -> Linear -> spatial filter -> dB.
+   - Applying convolution kernel directly on dB image is mathematically incorrect and must be avoided.
+4) Report before/after metrics to confirm processing effect.
+   - Compute comparable AOI statistics (e.g., mean backscatter in dB) before and after filtering.
+5) Respect Earth Engine lazy execution.
+   - Build server-side pipeline and only call getInfo() on compact final values.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect available Sentinel-1 scenes, orbit direction, polarization, and mode
+  - verify target band exists (VV or VH)
+- Think:
+  - separate physical conversion and filtering steps to avoid domain mismatch
+  - design closed-loop validation with before/after AOI statistics
+- Act:
+  - filter collection by AOI/date/mode/polarization/orbit
+  - convert dB image to linear, run boxcar filter, then convert back to dB
+  - print mean backscatter before and after filtering
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+ee.Initialize(project="ee-hku-geog7310")
+
+aoi = ee.Geometry.Point([114.1694, 22.3193]).buffer(3000)
+
+s1 = (
+    ee.ImageCollection("COPERNICUS/S1_GRD")
+    .filterBounds(aoi)
+    .filterDate("2023-01-01", "2023-12-31")
+    .filter(ee.Filter.eq("instrumentMode", "IW"))
+    .filter(ee.Filter.eq("orbitProperties_pass", "ASCENDING"))
+    .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
+    .select("VV")
+)
+
+vv_db = ee.Image(s1.sort("system:time_start").first())
+vv_linear = ee.Image(10).pow(vv_db.divide(10.0))
+vv_linear_filtered = vv_linear.convolve(ee.Kernel.square(radius=1, units="pixels", normalize=True))
+vv_db_filtered = vv_linear_filtered.log10().multiply(10.0).rename("VV_filtered_db")
+
+before = vv_db.reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=aoi,
+    scale=10,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("VV")
+after = vv_db_filtered.reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=aoi,
+    scale=10,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("VV_filtered_db")
+
+print("Original VV mean (dB):", ee.Number(before).getInfo())
+print("Filtered VV mean (dB):", ee.Number(after).getInfo())
+```
+
+Anti-patterns to avoid:
+- Mixing ASCENDING and DESCENDING orbits in one stack without clear intent.
+- Applying boxcar/Lee/Frost kernels directly to dB-domain image values.
+- Ignoring polarization mismatch (e.g., selecting VH logic but reading VV band).
+- Comparing pre/post values computed at inconsistent AOI or scale settings.
+
+Expected behavior for this pattern:
+- The workflow yields stable pre/post dB statistics and demonstrates the correct linear-domain speckle filtering pipeline.
 ===
