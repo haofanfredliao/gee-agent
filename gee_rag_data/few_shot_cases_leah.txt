@@ -638,3 +638,107 @@ Anti-patterns to avoid:
 Expected behavior for this pattern:
 - The pipeline outputs interpretable pre/post backscatter summaries and an estimated flood-affected area, suitable for rapid disaster change screening.
 ===
+
+## FEW_SHOT: Urban Heat Island Analysis with LST and Population Density (Case 9)
+
+Intent: execution
+Task type: urban climate hotspot analysis
+Keywords: UHI, LST, population density, Landsat 8 C2 L2, WorldPop, weighted mean, urban-rural contrast
+
+User task pattern:
+"Estimate urban heat island intensity in Hong Kong by combining Landsat LST with population density and reporting urban-rural temperature contrast."
+
+Assets in this case:
+- LST source: LANDSAT/LC08/C02/T1_L2
+- Population source: WorldPop/GP/100m/pop/HKG_2020
+- Project ID: ee-hku-geog7310
+
+Critical rules (must follow):
+1) Convert Landsat thermal band to physical temperature first.
+   - LST_C = ST_B10 * 0.00341802 + 149.0 - 273.15
+   - Do not compare urban/rural intensity on raw ST_B10 integers.
+2) Keep temporal window explicit for LST climatology.
+   - Use a defined season/year (e.g., 2023 summer) before spatial analysis.
+3) Build population-based masks with clear thresholds.
+   - Use quantile-based or explicit density thresholds to separate urban-like and rural-like zones.
+4) Align spatial summary scale to cross-sensor analysis.
+   - When combining 30 m LST with 100 m population, use a stable summary scale (e.g., 100 m) in reduceRegion.
+5) Report UHI as a contrast metric.
+   - UHI intensity = mean LST(urban mask) - mean LST(rural mask)
+6) Optionally report population-weighted thermal metric.
+   - weighted_LST = sum(LST * POP) / sum(POP) for socio-economic exposure interpretation.
+7) Respect Earth Engine lazy execution.
+   - Keep pipeline server-side and call getInfo() only on final metrics.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect Landsat scene availability and WorldPop coverage in AOI
+  - verify LST and POP bands and intended units
+- Think:
+  - define urban/rural partition strategy from population density
+  - define outputs: urban mean, rural mean, UHI intensity, weighted LST
+- Act:
+  - convert ST_B10 to Celsius and build seasonal mean LST image
+  - derive population masks and compute zonal means
+  - compute urban-rural contrast and print final scalar indicators
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+ee.Initialize(project="ee-hku-geog7310")
+
+aoi = ee.Geometry.Point([114.1694, 22.3193]).buffer(15000)
+
+lst_c = (
+    ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+    .filterBounds(aoi)
+    .filterDate("2023-06-01", "2023-09-01")
+    .filter(ee.Filter.eq("PROCESSING_LEVEL", "L2SP"))
+    .select("ST_B10")
+    .mean()
+    .multiply(0.00341802)
+    .add(149.0)
+    .subtract(273.15)
+    .rename("LST_C")
+)
+
+pop = ee.Image("WorldPop/GP/100m/pop/HKG_2020").select("population").rename("POP")
+stats = pop.reduceRegion(
+    reducer=ee.Reducer.percentile([25, 75]),
+    geometry=aoi,
+    scale=100,
+    bestEffort=True,
+    maxPixels=1_000_000,
+)
+urban_mask = pop.gte(ee.Number(stats.get("POP_p75")))
+rural_mask = pop.lte(ee.Number(stats.get("POP_p25")))
+
+urban_lst = lst_c.updateMask(urban_mask).reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=aoi,
+    scale=100,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("LST_C")
+rural_lst = lst_c.updateMask(rural_mask).reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=aoi,
+    scale=100,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("LST_C")
+uhi = ee.Number(urban_lst).subtract(ee.Number(rural_lst))
+
+print("UHI intensity (C, urban-rural):", uhi.getInfo())
+```
+
+Anti-patterns to avoid:
+- Comparing urban/rural intensity with unconverted ST_B10 raw values.
+- Mixing mismatched temporal windows between LST and interpretation period.
+- Using arbitrary masks that return null statistics (no valid pixels in AOI).
+- Reporting only one zone temperature without urban-rural contrast metric.
+
+Expected behavior for this pattern:
+- The output includes valid urban and rural mean LST plus UHI intensity (urban-rural, Celsius), enabling interpretable heat-risk diagnostics with socio-economic context.
+===
