@@ -472,3 +472,81 @@ Anti-patterns to avoid:
 Expected behavior for this pattern:
 - The output is a stable AOI-level 2023 mean nighttime-light radiance metric after log1p-style transformation, suitable as an economic activity proxy.
 ===
+
+## FEW_SHOT: Vegetation Productivity Estimation with MODIS GPP (Case 7)
+
+Intent: execution
+Task type: ecosystem productivity estimation
+Keywords: MODIS/061/MOD17A2HGF, GPP, vegetation productivity, scale factor, annual aggregation, carbon flux
+
+User task pattern:
+"Estimate annual vegetation productivity over Hong Kong using MODIS GPP and report AOI-level mean annual GPP."
+
+Assets in this case:
+- Image collection: MODIS/061/MOD17A2HGF
+- Project ID: ee-hku-geog7310
+
+Critical rules (must follow):
+1) Select the correct productivity band.
+   - Use .select("Gpp") from MOD17A2HGF.
+2) Apply the official scale factor before any physical interpretation.
+   - Gpp physical value = raw Gpp * 0.0001
+3) Respect temporal semantics of GPP composites.
+   - MOD17A2HGF is 8-day composite; annual GPP should be aggregated with .sum(), not .mean().
+4) Keep units explicit after conversion and aggregation.
+   - After scale-factor conversion and annual sum, report as annual productivity (kg C m^-2 yr^-1 context).
+5) Use stable zonal summary settings.
+   - Use reduceRegion over AOI at scale=500 to align with MODIS nominal resolution convention.
+6) Respect Earth Engine lazy execution.
+   - Build collection transformations server-side and call getInfo() only on final scalar outputs.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect dataset id, target band Gpp, and number of 2023 composite images
+  - inspect intended aggregation period (annual) and AOI
+- Think:
+  - map task to pipeline: scale conversion -> temporal sum -> spatial mean
+  - ensure aggregation choice follows variable semantics (flux accumulation vs state average)
+- Act:
+  - filter MOD17A2HGF by AOI and 2023 date range
+  - convert Gpp using scale factor and sum all composites
+  - reduce annual image over AOI and print mean annual GPP
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+ee.Initialize(project="ee-hku-geog7310")
+
+aoi = ee.Geometry.Point([114.1694, 22.3193]).buffer(5000)
+
+gpp_2023 = (
+    ee.ImageCollection("MODIS/061/MOD17A2HGF")
+    .filterBounds(aoi)
+    .filterDate("2023-01-01", "2024-01-01")
+    .select("Gpp")
+)
+
+gpp_kg = gpp_2023.map(lambda img: img.multiply(0.0001).rename("Gpp_kgC_m2_8day"))
+annual_gpp = gpp_kg.sum().rename("annual_gpp_kgC_m2")
+
+mean_annual_gpp = annual_gpp.reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=aoi,
+    scale=500,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("annual_gpp_kgC_m2")
+
+print("Mean annual GPP (kg C m^-2 yr^-1):", ee.Number(mean_annual_gpp).getInfo())
+```
+
+Anti-patterns to avoid:
+- Using raw Gpp integers directly without applying scale factor 0.0001.
+- Computing annual GPP with .mean() and treating it as cumulative annual productivity.
+- Mixing data outside the target year when task requires strict annual estimate.
+- Omitting unit context in final reported number.
+
+Expected behavior for this pattern:
+- The output is an AOI-level annual vegetation productivity estimate with physically interpretable magnitude after proper scale conversion and temporal accumulation.
+===
