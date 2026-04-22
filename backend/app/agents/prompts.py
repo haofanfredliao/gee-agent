@@ -47,6 +47,10 @@ PLANNER_PROMPT = """\
 2. execute 步骤总数控制在 1–3 步，不要过度拆解。总步骤数不超过 N+3。
 3. 只输出 JSON 数组，不要有任何额外说明或 markdown 标记。
 4. 若会话上下文中已有对应 asset 的元数据，可直接跳过该 asset 的 inspect。
+5. 香港区级任务强约束：若 query 出现“香港+区级名称”（如 中西区/湾仔区/南区/油尖旺 等），
+   行政边界 inspect 必须优先使用
+   `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`。
+   不得仅使用 `USDOS/LSIB_SIMPLE/2017` 作为区级边界来源。
 
 示例（两个 asset）：
 [

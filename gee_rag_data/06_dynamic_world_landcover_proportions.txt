@@ -1,0 +1,178 @@
+## FEW_SHOT: Dynamic World Class Proportions in an AOI
+
+Status: completed
+Priority: P1
+Category: case_study
+Confidence: high
+Validation stage: passed
+
+Intent: execution
+Task type: simple statistics
+Keywords: Dynamic World, land cover, class proportions, area fraction, classification
+
+User task pattern:
+"Use Dynamic World to summarize land cover class proportions in my AOI for a given period."
+
+Assets in this case:
+- GOOGLE/DYNAMICWORLD/V1
+- user provided AOI
+
+Auto-AOI strategy (when user does not specify range):
+- place name -> OSM or admin boundary resolve (default example place: Hong Kong)
+- fallback to current map context small AOI
+- if both unavailable, ask user for place name or AOI
+- natural-language alias normalization examples:
+  - "深圳南山区" -> candidate aliases: ["Nanshan", "Nanshan Qu", "南山区"]
+  - if alias match fails in boundary source, do not guess geometry; ask user for AOI
+
+AOI consistency template (global, reusable):
+- preferred AOI source order:
+  1) user-provided geometry or asset ID
+  2) for Hong Kong district-level requests: `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`
+  3) OSM/Nominatim place boundary resolve (default example place: Hong Kong)
+  4) FAO/GAUL/2015/level2 (or equivalent accessible admin boundary)
+  5) current map context small AOI
+- do not depend on private or unverified assets unless access is confirmed.
+- when user explicitly confirms `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, treat it as verified primary source for Hong Kong district tasks.
+- if AOI resolution fails, first try documented fallback boundaries; if still unresolved, continue with a controlled approximate AOI and ask for clarification.
+  Do not return 0-area results as valid outputs when AOI is unresolved.
+  If diagnostics show final_count==0 or empty geometry, print `WARN_APPROX_AOI` and continue in degraded mode using controlled approximate AOI, and clearly report uncertainty.
+  Never coerce null/None statistics to 0 when AOI is unresolved.
+- in follow-up turns, keep prior AOI and method unless the user explicitly asks to change them.
+
+Boundary and AOI robustness guardrails:
+- Always keep and print `aoi_source` and `boundary_asset` metadata in execution outputs.
+- For admin-boundary lookup, use exact field match first, then controlled `stringContains` fallback in the same boundary dataset.
+- If boundary match count is 0, do not silently switch to unrelated boundary datasets; ask user or use documented fallback only.
+- Never replace the user-requested place/admin target with another district name; require explicit user confirmation before switching target.
+- If reduction output key is missing/null, retry once with a small buffered AOI and tag the metric source.
+- Never coerce missing statistics to 0; keep null/None and explain why.
+- Always print AOI diagnostics (`candidate_count`, `final_count`, and period `image_count`) before final summary.
+- For `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, preview both `NAME_EN` and `NAME_TC` before filtering.
+- For Hong Kong district-level matching, use alias-safe filters on real fields (English + Chinese aliases) instead of a single hardcoded district string.
+
+Critical rules (must follow):
+1) Before AOI selection, print boundary candidate names/counts with real fields, then do exact match and controlled fallback in the same dataset.
+2) State the time window because Dynamic World is time sensitive.
+3) Convert class counts to percentages or areas before reporting.
+4) For this task pattern, default to ONE execute step after required inspect.
+5) If an earlier execute step already produced valid top5+others percentages, do not add another execute step for re-formatting.
+6) Do not use bestEffort=True for this case; keep scale=10 and raise maxPixels when needed.
+7) In Python earthengine-api, do not sort ee.List with (key, ascending) style arguments.
+8) If boundary extraction or AOI preparation step fails, STOP the workflow and return missing-input request; do not run downstream execute steps.
+9) When blocked by missing AOI, output a machine-readable blocker line first:
+   WARN_APPROX_AOI: <reason>
+   Then provide concise user-facing missing-input request.
+10) Before declaring AOI unresolved, run a diagnostic inspect in the same execute step and print:
+    - candidate count after country/province filter,
+    - top candidate ADM2_NAME values (e.g., first 20),
+    - whether aliases ("Nanshan", "Nanshan Qu", "南山区") appear,
+    - optional candidate bbox/centroid for quick verification.
+11) Use fixed diagnostic print keys so downstream summarize can preserve them:
+    - print("DIAG_CANDIDATE_COUNT", <number>)
+    - print("DIAG_ADM2_SAMPLE", <list_of_names>)
+    - print("DIAG_ALIAS_HIT", <true_or_false>)
+    - print("WARN_APPROX_AOI", <reason>)
+    Do not replace these keys with paraphrased Chinese text.
+12) Before fixing endDate, inspect collection availability and cap to the latest complete period available in the dataset.
+
+Latency-first options:
+- Scope: one quarter or one season first
+- Output shape: class_area_grouped or class_percentage table
+- Degrade path: full class table -> top classes + others
+- Note: do NOT remove AOI by default; large/global region is usually slower.
+- Note: "no manual range" should mean "auto-derived small AOI", not global computation.
+
+Minimal runnable path:
+- Filter Dynamic World collection by AOI and date range.
+- Build representative class layer (e.g., mode of label band).
+- Summarize class area and convert to area share if needed.
+- Prefer grouped-area + FeatureCollection sort pattern in Python:
+  - reduceRegion(sum().group(...)) -> List[dict]
+  - map to FeatureCollection with {class_id, area_m2, percent}
+  - sort on FeatureCollection: fc.sort('percent', False).limit(5)
+- If exact AOI match fails:
+  - print diagnostic summary from FAO/GAUL/2015/level2 using available fields:
+    - filter ADM0_NAME='China', ADM1_NAME in ['Guangdong', 'Guangdong Sheng'] (if available),
+    - collect distinct ADM2_NAME candidates (limit output),
+    - print candidate size and sample names.
+  - then return WARN_APPROX_AOI with required inputs.
+
+Reference diagnostic Python snippet (AOI unresolved branch):
+```python
+gaul = ee.FeatureCollection("FAO/GAUL/2015/level2")
+cn = gaul.filter(ee.Filter.eq("ADM0_NAME", "China"))
+gd = cn.filter(ee.Filter.Or(
+    ee.Filter.eq("ADM1_NAME", "Guangdong"),
+    ee.Filter.eq("ADM1_NAME", "Guangdong Sheng")
+))
+
+adm2_names = ee.List(gd.aggregate_array("ADM2_NAME")).distinct().sort()
+name_sample = adm2_names.slice(0, 20)
+alias_hit = adm2_names.contains("Nanshan") \
+    .Or(adm2_names.contains("Nanshan Qu")) \
+    .Or(adm2_names.contains("南山区"))
+
+print("DIAG_CANDIDATE_COUNT", adm2_names.size())
+print("DIAG_ADM2_SAMPLE", name_sample)
+print("DIAG_ALIAS_HIT", alias_hit)
+print("WARN_APPROX_AOI", "Nanshan not found in FAO/GAUL/2015/level2 after China/Guangdong filter")
+```
+
+Positive ReAct trajectory:
+- Observe:
+  - confirm AOI and date window
+  - confirm whether to use class label or probability-based approach
+- Think:
+  - define class summarization method
+  - choose percentage or area as final output
+- Act:
+  - filter Dynamic World by AOI/time
+  - build representative class layer
+  - summarize class counts and convert to proportions
+  - stop after first valid table output; avoid redundant second execute
+  - if previous step already returned WARN_APPROX_AOI, continue computation in degraded mode and relay uncertainty plus required inputs
+
+Reference JavaScript snippet (GEE Code Editor):
+```javascript
+var aoi = ee.Geometry.Rectangle([113.95, 22.28, 114.05, 22.38]); // replace if available
+var startDate = '2022-07-01';
+var endDate = '2022-09-30';
+
+var dw = ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
+  .filterBounds(aoi)
+  .filterDate(startDate, endDate);
+
+var label = dw.select('label').mode();
+var classArea = ee.Image.pixelArea().addBands(label).reduceRegion({
+  reducer: ee.Reducer.sum().group({
+    groupField: 1,
+    groupName: 'class'
+  }),
+  geometry: aoi,
+  scale: 10,
+  maxPixels: 1e13
+});
+
+print('class_area_grouped', classArea);
+```
+
+Anti-patterns to avoid:
+- Ignoring the temporal nature of the dataset.
+- Mixing probability bands with the label band without explanation.
+- Returning user guidance as "recommended prompt/template" instead of asking for concrete missing inputs.
+- Continuing with guessed AOI after place resolution failed.
+- Planning two execute steps where step-2 only re-computes/re-sorts already available results.
+- Using ee.List.sort('value', False), ee.List.sort(lambda..., False), or ee.List.sortBy(...) in Python.
+- Continuing to step-3 computation after step-2 AOI/boundary failure.
+- Hiding blocker status in verbose text without explicit blocker token.
+- In downstream steps, replacing blocker relay with new speculative computation attempts.
+- Failing immediately on "Nanshan" mismatch without printing available ADM2_NAME candidates for inspection.
+- Changing required diagnostic print keys to free-form prose, which breaks blocker detection.
+- Extracting results with repeated getInfo() loops when a single aggregated print is enough.
+
+Expected behavior for this pattern:
+- Class -> percentage or area table
+- When AOI unresolved: return exact missing inputs request (GeoJSON / Asset ID / boundary source), no fallback computation.
+
+===

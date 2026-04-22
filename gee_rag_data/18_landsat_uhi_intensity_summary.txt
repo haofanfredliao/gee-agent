@@ -1,0 +1,287 @@
+## DRAFT: Landsat Urban Heat Island Intensity Summary
+
+Status: draft
+Priority: P2
+Category: coursework
+Confidence: medium
+Validation stage: not_started
+
+Why this candidate:
+- UHI is a high-value applied topic for urban climate coursework and research discussion.
+- It can be delivered as urban-rural temperature contrast statistics without interactive maps.
+- It avoids duplication with pure LST inversion by focusing on UHI intensity definition and comparison.
+
+Suggested source:
+- Earth Engine Landsat thermal examples and urban-environment case references
+- GEE case-study style urban climate workflows reduced to concise metrics
+- gishub examples for thermal index and zonal summaries
+- Open research reproduction notes (including Wuqiusheng-related references) adapted to assignment-level simplicity
+
+## FEW_SHOT: Landsat Urban Heat Island Intensity Summary for an AOI
+
+Intent: execution
+Task type: simple statistics
+Keywords: UHI, urban heat island, Landsat 8 L2, thermal, urban-rural contrast, non-interactive
+
+User task pattern:
+"Estimate urban heat island intensity in my AOI using Landsat thermal data and return a simple summary table."
+
+Scope lock (must enforce):
+- This profile is ONLY for UHI/temperature contrast tasks (urban vs rural thermal metrics).
+- If user intent is forest-loss / deforestation / yearly loss-area table, this profile is out-of-scope.
+- In out-of-scope cases, do not generate UHI code, do not use Landsat thermal pipeline, and do not output UHI fields.
+- Redirect to the Hansen profile `11_hansen_forest_loss_area_by_year.txt` (dataset `UMD/hansen/global_forest_change_2022_v1_10`).
+
+Out-of-scope trigger examples (hard block):
+- "森林损失面积", "forest loss", "deforestation", "lossyear", "Hansen"
+- "按年给表格", "近三年年度", "km² forest loss by year"
+
+Public datasets in this case:
+- LANDSAT/LC08/C02/T1_L2
+- ESA/WorldCover/v200
+
+Optional boundary or AOI source:
+- user provided AOI
+
+Auto-AOI strategy (when user does not specify range):
+- place name -> OSM or admin boundary resolve (default example place: Hong Kong)
+- fallback to current map context small AOI
+- if both unavailable, ask user for place name or AOI
+
+AOI consistency template (global, reusable):
+- preferred AOI source order:
+  1) user-provided geometry or asset ID
+  2) for Hong Kong district-level requests: `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`
+  3) OSM/Nominatim place boundary resolve (default example place: Hong Kong)
+  4) FAO/GAUL/2015/level2 (or equivalent accessible admin boundary)
+  5) current map context small AOI
+- do not depend on private or unverified assets unless access is confirmed.
+- when user explicitly confirms `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, treat it as verified primary source for Hong Kong district tasks.
+- if AOI resolution fails, first try documented fallback boundaries; if still unresolved, continue with a controlled approximate AOI and ask for clarification.
+  Do not return 0-area results as valid outputs when AOI is unresolved.
+  If diagnostics show final_count==0 or empty geometry, print `WARN_APPROX_AOI` and continue in degraded mode using controlled approximate AOI, and clearly report uncertainty.
+  Never coerce null/None statistics to 0 when AOI is unresolved.
+- in follow-up turns, keep prior AOI and method unless the user explicitly asks to change them.
+
+Boundary and AOI robustness guardrails:
+- Always keep and print `aoi_source` and `boundary_asset` metadata in execution outputs.
+- For admin-boundary lookup, use exact field match first, then controlled `stringContains` fallback in the same boundary dataset.
+- If boundary match count is 0, do not silently switch to unrelated boundary datasets; ask user or use documented fallback only.
+- Never replace the user-requested place/admin target with another district name; require explicit user confirmation before switching target.
+- If reduction output key is missing/null, retry once with a small buffered AOI and tag the metric source.
+- Never coerce missing statistics to 0; keep null/None and explain why.
+- Always print AOI diagnostics (`candidate_count`, `final_count`, and period `image_count`) before final summary.
+- For `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, preview both `NAME_EN` and `NAME_TC` before filtering.
+- For Hong Kong district requests, print district-name preview (for example `hk_district_name_preview`) before final district pick so naming mismatches are visible.
+- Normalize district aliases before matching (for example `Central and Western`, `Central & Western`, `Central and Western District`, `中西区`, `中西區`).
+
+Non-negotiable rules block (must not be violated):
+1) AOI preflight gate: print `candidate_count`, `candidate_names_preview`, `final_count`, `aoi_source`, and `boundary_asset` before any reduction.
+   If `final_count==0` or AOI geometry is empty, print `WARN_APPROX_AOI` and continue with controlled approximate AOI for degraded `clip`/`reduceRegion`, while reporting uncertainty.
+2) For Hong Kong Central and Western target, boundary source must use
+   `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary` as primary.
+   First inspect real field names, then apply multilingual alias matching on the district field.
+3) UHI task asset isolation: only use task-relevant inspected assets (boundary + Landsat L2 + land cover).
+   Do not let unrelated assets (for example Sentinel-1 collections) influence AOI selection or UHI computation.
+4) Mask availability check before delta: compute `urban_pixel_count` and `rural_pixel_count` first.
+   If either is below `min_effective_pixels` (default 30) or statistic key is missing/null, print `BLOCKED_INSUFFICIENT_SAMPLES` and stop.
+   Include `insufficient_class`, `urban_pixel_count`, `rural_pixel_count`, and `min_effective_pixels` in the blocked output.
+   Never coerce missing values to 0 and never compute fake delta.
+5) Boundary asset guardrail: do not use unverified private paths (for example `projects/google/geetools/assets/...`) unless explicitly provided and confirmed by user.
+   For Hong Kong district tasks, default boundary source is
+   `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`.
+   Use `FAO/GAUL/2015/level2` only as documented fallback when the primary asset is unavailable.
+   If boundary inspect/load fails, output `BLOCKED_MISSING_BOUNDARY_ASSET` and stop before AOI/materialization.
+6) Image availability hard gate: before temperature reduction, print `image_count` and confirm selected LST band exists.
+   If `image_count==0` or output image has no target band, print `BLOCKED_MISSING_IMAGE` and stop.
+7) Python syntax safety: never use `ee.Filter.and(...)`, `ee.Filter.or(...)`, or `ee.Filter.not(...)`
+   (invalid in Python due keyword conflict / parser ambiguity).
+   Use chained `.filter(...)` calls or `ee.Filter.And(...)` / `ee.Filter.Or(...)` / `ee.Filter.Not(...)`.
+
+Critical rules (must follow):
+1) Before AOI selection, print boundary candidate names/counts with real fields, then do exact match and controlled fallback in the same dataset.
+2) Boundary asset lock: for Hong Kong district requests, the primary boundary asset path must be exactly
+   `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`.
+   Do not silently switch to GAUL unless primary asset inspection/loading fails and fallback is explicitly logged.
+3) Define urban and non-urban masks transparently, then compute urban-rural temperature difference.
+4) Output numeric UHI indicators only; no interactive map dependency.
+5) Do not present this as generic LST retrieval case; emphasize UHI intensity interpretation.
+6) If auxiliary land-cover mask is unavailable, state fallback rule and uncertainty.
+7) Before fixing endDate, inspect collection availability and cap to the latest complete period available in the dataset.
+8) In Python, boundary filtering must avoid `ee.Filter.and/or/not`; use chained filters or
+   `ee.Filter.And(...)` / `ee.Filter.Or(...)` / `ee.Filter.Not(...)`.
+9) For MODIS LST flow, do not run `.projection()/.clip()`-dependent operations on unchecked empty images; gate by `image_count` first.
+10) Always report class-wise effective pixels (`urban_pixel_count`, `rural_pixel_count`) together with temperature outputs.
+11) If any class has insufficient samples, return blocked status instead of partial/placeholder UHI values.
+12) Intent boundary hard gate:
+    if query requests forest-loss yearly area statistics (keywords like `forest loss` / `森林损失` / `Hansen` / `lossyear`),
+    this UHI profile must not be used to synthesize code.
+    Emit a clear reroute hint to Hansen loss workflow and stop UHI generation for this turn.
+13) Temperature conversion hard gate (must not skip):
+    do not report raw `ST_B10` values as Celsius.
+    Landsat L2 surface temperature must be converted as:
+    `temp_c = ST_B10 * 0.00341802 + 149.0 - 273.15`.
+    Print `selected_band` and `temp_unit` diagnostics before final stats.
+14) Cloud/quality mask hard gate:
+    before thermal reduction, apply QA masking (at least cloud + cloud-shadow from `QA_PIXEL`; optional saturation/quality checks).
+    If valid-pixel count after masking is too low, return blocked status rather than unreliable temperature numbers.
+15) Plausibility guard for Hong Kong summer windows:
+    if derived mean temperature is far outside a reasonable range (for example `< -5°C` or `> 50°C`),
+    emit `WARN_SUSPECT_TEMP_SCALING` and avoid presenting the value as trusted final output.
+
+Do-Not Rules (strictly prohibited):
+1) Do not bypass the confirmed Hong Kong district boundary asset by forcing GAUL as primary for Hong Kong district tasks.
+2) Do not proceed to temperature reduction when AOI preflight failed (`final_count==0` or empty geometry).
+3) Do not report `uhi_intensity` when `urban_pixel_count` or `rural_pixel_count` is below threshold.
+4) Do not replace missing mean values with `0`, `"0.0"`, or any default numeric placeholder.
+5) Do not change boundary dataset silently after GAUL failure without explicit user confirmation or documented fallback path.
+6) Do not answer forest-loss requests with UHI/LST/VIIRS code, even if AOI terms overlap (e.g., Hong Kong district names).
+7) Do not fabricate UHI outputs for queries that explicitly require yearly forest-loss area tables.
+8) Do not compute/report UHI from unscaled raw `ST_B10` digital values.
+9) Do not skip QA-based cloud masking for humid/subtropical summer windows and then present results as final.
+
+Latency-first options:
+- Scope: one warm-season window, small AOI
+- Output shape: urban_mean_temp, rural_mean_temp, uhi_intensity, sample_count
+- Degrade path: full seasonal table -> single window summary
+- Note: do NOT remove AOI by default; large/global region is usually slower.
+- Note: "no manual range" should mean "auto-derived small AOI", not global computation.
+
+Minimal runnable path:
+- Resolve AOI with multilingual district alias normalization, then validate with `candidate_count/final_count` diagnostics.
+- Create Landsat thermal composite, apply QA cloud mask, and convert to Celsius with official L2 formula.
+- Build urban/rural masks from a public land-cover source.
+- Compute and print `urban_pixel_count/rural_pixel_count`; hard-block if either class is insufficient.
+- Reduce temperature over valid masks and compute UHI intensity summary only when all hard gates pass.
+
+Hong Kong district AOI resolve snippet (must pass before thermal stats):
+```javascript
+var hk = ee.FeatureCollection('projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary');
+print('boundary_asset', 'projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary');
+print('hk_candidate_count', hk.size());
+
+// Replace `DISTRICT` with the real district-name field from inspector output.
+print('hk_district_name_preview', hk.aggregate_array('DISTRICT'));
+
+var targetAlias = ee.List([
+  'Central and Western',
+  'Central & Western',
+  'Central and Western District',
+  '中西区',
+  '中西區'
+]);
+
+var cAndW = hk.filter(ee.Filter.inList('DISTRICT', targetAlias));
+print('final_count', cAndW.size());
+
+// Hard gate: never continue if district AOI is unresolved.
+var finalCount = ee.Number(cAndW.size());
+print('blocked_status', ee.Algorithms.If(finalCount.gt(0), 'OK', 'WARN_APPROX_AOI'));
+```
+
+Reference JavaScript snippet (GEE Code Editor):
+```javascript
+var aoi = ee.Geometry.Rectangle([113.95, 22.28, 114.05, 22.38]); // replace if available
+var startDate = '2022-06-01';
+var endDate = '2022-09-30';
+var minEffectivePixels = 30;
+
+function maskL8L2(image) {
+  var qa = image.select('QA_PIXEL');
+  var cloudShadowBit = 1 << 4;
+  var cloudBit = 1 << 3;
+  var clear = qa.bitwiseAnd(cloudShadowBit).eq(0)
+    .and(qa.bitwiseAnd(cloudBit).eq(0));
+  return image.updateMask(clear);
+}
+
+var l8 = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+  .filterBounds(aoi)
+  .filterDate(startDate, endDate)
+  .map(maskL8L2);
+
+var thermal = l8.mean()
+  .select('ST_B10')
+  .multiply(0.00341802)
+  .add(149.0)
+  .subtract(273.15)
+  .rename('temp_c');
+
+var wc = ee.ImageCollection('ESA/WorldCover/v200').first().select('Map');
+var urbanMask = wc.eq(50); // built-up
+var ruralMask = wc.neq(50).and(wc.neq(80)); // non-urban and non-water
+
+var urbanPixelCount = thermal.updateMask(urbanMask).reduceRegion({
+  reducer: ee.Reducer.count(),
+  geometry: aoi,
+  scale: 30,
+  maxPixels: 1e13
+}).get('temp_c');
+
+var ruralPixelCount = thermal.updateMask(ruralMask).reduceRegion({
+  reducer: ee.Reducer.count(),
+  geometry: aoi,
+  scale: 30,
+  maxPixels: 1e13
+}).get('temp_c');
+
+print('urban_pixel_count', urbanPixelCount);
+print('rural_pixel_count', ruralPixelCount);
+print('min_effective_pixels', minEffectivePixels);
+
+var hasEnoughUrban = ee.Number(urbanPixelCount).gte(minEffectivePixels);
+var hasEnoughRural = ee.Number(ruralPixelCount).gte(minEffectivePixels);
+var enoughSamples = hasEnoughUrban.and(hasEnoughRural);
+
+var urbanMean = ee.Algorithms.If(enoughSamples, thermal.updateMask(urbanMask).reduceRegion({
+  reducer: ee.Reducer.mean(),
+  geometry: aoi,
+  scale: 30,
+  maxPixels: 1e13
+}).get('temp_c'), null);
+
+var ruralMean = ee.Algorithms.If(enoughSamples, thermal.updateMask(ruralMask).reduceRegion({
+  reducer: ee.Reducer.mean(),
+  geometry: aoi,
+  scale: 30,
+  maxPixels: 1e13
+}).get('temp_c'), null);
+
+var blockedClass = ee.Algorithms.If(hasEnoughUrban, ee.Algorithms.If(hasEnoughRural, null, 'rural'), 'urban');
+var uhi = ee.Algorithms.If(
+  enoughSamples,
+  ee.Number(urbanMean).subtract(ee.Number(ruralMean)),
+  null
+);
+
+print('blocked_status', ee.Algorithms.If(enoughSamples, 'OK', 'BLOCKED_INSUFFICIENT_SAMPLES'));
+print('insufficient_class', blockedClass);
+print('urban_mean_temp_c', urbanMean);
+print('rural_mean_temp_c', ruralMean);
+print('uhi_intensity_c', uhi);
+```
+
+Expected output:
+- UHI summary report (urban mean, rural mean, intensity difference, period metadata)
+
+Failure modes:
+- Ignoring L2 thermal scaling and unit conversion causes invalid temperature values.
+- Urban/rural class mapping mismatch leads to unstable contrast estimates.
+- Using `ee.Filter.and(...)` / `ee.Filter.or(...)` / `ee.Filter.not(...)` in Python triggers `invalid syntax`.
+- AOI resolved from invalid/private boundary asset path causes downstream null geometry errors.
+- Running mean/projection on empty image collection can trigger `Image has no bands`.
+- Using `FAO/GAUL/2015/level2` as primary boundary source for this Hong Kong district case can miss expected district matches.
+- Not inspecting district field names in `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary` may cause wrong filter keys and false boundary-missing blocks.
+- Returning UHI values when one class has too few pixels creates pseudo-results and must be blocked explicitly.
+- Query-intent hijack: forest-loss requests (e.g., "近三年年度森林损失面积 km²") are mistakenly answered by UHI code.
+  This is a hard failure; must reroute to Hansen forest-loss profile instead of generating thermal statistics.
+- Reporting physically implausible temperatures (e.g., around `-20°C` in Hong Kong summer) due to missing ST_B10 scaling or insufficient QA masking.
+
+Promotion checklist:
+- [ ] GEE Code Editor (JavaScript) native run passed
+- [ ] agent execution passed
+- [ ] frontend integration passed
+- [ ] band / scale / reducer / unit verified
+- [ ] output remains stable across reruns
+
+===

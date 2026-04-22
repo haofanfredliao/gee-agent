@@ -49,6 +49,10 @@ from backend.app.core.config import DEFAULT_CENTER_LAT, DEFAULT_CENTER_LON, DEFA
 # ─── 辅助函数 ────────────────────────────────────────────────────────────────
 
 _ASSET_PATH_RE = re.compile(r"projects/[\w\-]+/assets/[\w\-/]+")
+_HK_DISTRICT_ASSET = "projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary"
+_HK_DISTRICT_QUERY_RE = re.compile(
+    r"(香港).*(中西区|灣仔|湾仔|油尖旺|深水埗|東區|东区|南區|南区|北區|北区|西貢|西贡|沙田|葵青|荃灣|荃湾|屯門|屯门|元朗|離島|离岛|九龍城|九龙城|黃大仙|黄大仙|觀塘|观塘)"
+)
 
 
 def _extract_asset_ids(text: str) -> List[str]:
@@ -167,6 +171,33 @@ async def _plan(state: WorkflowState) -> WorkflowState:
                     "asset_id": None,
                 }
             ]
+
+    # 香港区级任务计划修正：
+    # 1) 确保优先检查已确认的香港区级边界资产
+    # 2) 避免仅依赖 USDOS/LSIB_SIMPLE/2017 这种国家级边界做区级定位
+    if _HK_DISTRICT_QUERY_RE.search(state["query"] or ""):
+        has_hk_boundary_inspect = any(
+            s.get("type") == "inspect" and s.get("asset_id") == _HK_DISTRICT_ASSET
+            for s in plan
+        )
+        if not has_hk_boundary_inspect:
+            plan.insert(
+                0,
+                {
+                    "description": "检查香港区级行政边界",
+                    "type": "inspect",
+                    "asset_id": _HK_DISTRICT_ASSET,
+                },
+            )
+
+        # 若存在仅用于行政边界定位的 USDOS inspect，则移除，减少误导与歧义
+        plan = [
+            s for s in plan
+            if not (
+                s.get("type") == "inspect"
+                and s.get("asset_id") == "USDOS/LSIB_SIMPLE/2017"
+            )
+        ]
 
     state["plan"] = plan
     return state

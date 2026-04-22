@@ -44,16 +44,47 @@ def chat_stream(
         payload["session_id"] = session_id
     if map_context:
         payload["map_context"] = map_context
-    with httpx.Client(timeout=TIMEOUT) as client:
-        with client.stream("POST", _url("/chat/stream"), json=payload) as resp:
-            resp.raise_for_status()
-            for line in resp.iter_lines():
-                line = line.strip()
-                if line:
+    got_done = False
+    stream_error: Optional[Exception] = None
+
+    try:
+        with httpx.Client(timeout=TIMEOUT) as client:
+            with client.stream("POST", _url("/chat/stream"), json=payload) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    line = line.strip()
+                    if not line:
+                        continue
                     try:
-                        yield json.loads(line)
+                        evt = json.loads(line)
                     except json.JSONDecodeError:
-                        pass
+                        continue
+                    if evt.get("type") == "done":
+                        got_done = True
+                    yield evt
+    except Exception as e:
+        stream_error = e
+
+    # 流式中断或未完整结束时，自动回退到非流式请求，避免用户看到“incomplete chunked read”直接失败。
+    if got_done:
+        return
+
+    try:
+        fallback_resp = chat(message, session_id=session_id, map_context=map_context)
+        if stream_error is not None:
+            yield {
+                "type": "error",
+                "data": {
+                    "message": f"流式连接中断，已自动回退非流式返回最终结果：{stream_error}",
+                },
+            }
+        yield {"type": "done", "data": fallback_resp}
+    except Exception as fallback_error:
+        if stream_error is not None:
+            msg = f"请求失败：{stream_error}；回退失败：{fallback_error}"
+        else:
+            msg = f"请求失败：{fallback_error}"
+        yield {"type": "error", "data": {"message": msg}}
 
 
 def get_basemap_config() -> Dict[str, Any]:
