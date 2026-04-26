@@ -1,0 +1,359 @@
+## CASE: Sentinel-1 Flood Inundation Change Detection
+
+Status: completed
+Priority: P1
+Category: case_study
+Confidence: high
+Validation stage: passed
+
+Why this candidate:
+- Flood event before/after change detection is a common emergency-response and assignment scenario.
+- It produces concise numeric outputs (inundation area change) without interactive map requirements.
+- It upgrades existing water-statistics entries into event-oriented change detection.
+
+Suggested source:
+- Earth Engine official Sentinel-1 and flood-related examples
+- Earth Engine case-study style disaster workflows (simplified to tabular outputs)
+- gishub change-detection notebooks using SAR time windows
+- Open academic implementations (including Wuqiusheng-style project repos) adapted to minimal reproducible steps
+
+## FEW_SHOT: Sentinel-1 Flood Inundation Change Detection for an AOI
+
+Intent: execution
+Task type: data exploration
+Keywords: Sentinel-1, flood, inundation, before-after, change detection, SAR, disaster
+
+User task pattern:
+"Compare pre-flood and post-flood Sentinel-1 observations and summarize inundation area change in my AOI."
+"For Shenzhen Nanshan District, include explicit pre/post windows and output pre_area, post_area, delta_area, delta_percent."
+
+Public datasets in this case:
+- COPERNICUS/S1_GRD
+
+Optional boundary or AOI source:
+- user provided AOI
+
+Auto-AOI strategy (when user does not specify range):
+- place name -> OSM or admin boundary resolve (default example place: Hong Kong)
+- fallback to current map context small AOI
+- if both unavailable, ask user for place name or AOI
+
+AOI consistency template (global, reusable):
+- preferred AOI source order:
+  1) user-provided geometry or asset ID
+  2) for Hong Kong district-level requests: `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`
+  3) OSM/Nominatim place boundary resolve (default example place: Hong Kong)
+  4) FAO/GAUL/2015/level2 (or equivalent accessible admin boundary)
+  5) current map context small AOI
+- do not depend on private or unverified assets unless access is confirmed.
+- when user explicitly confirms `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, treat it as verified primary source for Hong Kong district tasks.
+- if AOI resolution fails, first try documented fallback boundaries; if still unresolved, continue with a controlled approximate AOI and ask for clarification.
+  Do not return 0-area results as valid outputs when AOI is unresolved.
+  If diagnostics show final_count==0 or empty geometry, print `WARN_APPROX_AOI` and continue in degraded mode using controlled approximate AOI, and clearly report uncertainty.
+  Never coerce null/None statistics to 0 when AOI is unresolved.
+- in follow-up turns, keep prior AOI and method unless the user explicitly asks to change them.
+
+Boundary and AOI robustness guardrails:
+- Always keep and print `aoi_source` and `boundary_asset` metadata in execution outputs.
+- For admin-boundary lookup, use exact field match first, then controlled `stringContains` fallback in the same boundary dataset.
+- If boundary match count is 0, do not silently switch to unrelated boundary datasets; ask user or use documented fallback only.
+- Never replace the user-requested place/admin target with another district name; require explicit user confirmation before switching target.
+- If reduction output key is missing/null, retry once with a small buffered AOI and tag the metric source.
+- Never coerce missing statistics to 0; keep null/None and explain why.
+- Always print AOI diagnostics (`candidate_count`, `final_count`, and period `image_count`) before final summary.
+- For `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, preview both `NAME_EN` and `NAME_TC` before filtering.
+- For Hong Kong district-level matching, use alias-safe filters on real fields (English + Chinese aliases) instead of a single hardcoded district string.
+- Do not use `USDOS/LSIB_SIMPLE/2017` to resolve district/county-level AOI (it is country-level and will cause false missing-AOI for district tasks).
+- For Shenzhen district-level requests (e.g., Nanshan), prefer `FAO/GAUL/2015/level2` with alias-safe matching on `ADM0_NAME`, `ADM1_NAME`, `ADM2_NAME`.
+- Shenzhen Nanshan alias set should include: `Nanshan`, `Nanshan Qu`, `Nan Shan`, `南山区`, `南山`.
+
+Critical rules (must follow):
+1) Before AOI selection, print boundary candidate names/counts with real fields, then do exact match and controlled fallback in the same dataset.
+2) Boundary asset lock: when GAUL is used, the asset path must be exactly `FAO/GAUL/2015/level2`; do not rewrite as `projects/...` aliases.
+3) If boundary inspect/load fails, output `BLOCKED_MISSING_BOUNDARY_ASSET` and stop this workflow before AOI geometry/materialization.
+4) Report inundation change numerically (area and ratio), not only threshold masks.
+5) Keep workflow non-interactive: no map-layer dependency in final answer.
+6) This case focuses on event change detection, not generic SAR preprocessing tutorials.
+7) Avoid repeating existing NDWI/JRC "static water extent" logic; emphasize temporal difference.
+8) Before fixing endDate, inspect collection availability and cap to the latest complete period available in the dataset.
+9) Language-safe server-side logic is mandatory: never use Python native boolean operators (`not`, `and`, `or`, `!=`) on `ee.*` objects.
+10) In Python outputs, never call `.Not()` on `ee.ComputedObject`; use `ee.Algorithms.If`, numeric comparisons (`ee.Number(...).gt/lt/eq`), and mask algebra equivalents instead.
+11) For period/data-availability checks, gate all downstream operations with server-side count checks; if required data is missing, print a blocking status and stop metric derivation.
+12) For district-level mainland-China tasks (such as Shenzhen Nanshan), never route AOI parsing to `USDOS/LSIB_SIMPLE/2017`.
+13) If user does not provide exact dates but asks pre/post comparison, generate explicit `pre_window` and `post_window` in output, and keep them consistent with actual filtering windows.
+14) Output contract for this query is strict: `pre_window`, `post_window`, `pre_area`, `post_area`, `delta_area`, `delta_percent`.
+    Do not silently rename to `pre_water_area_km2` or other aliases in final printed summary.
+
+Latency-first options:
+- Scope: one event pair (short pre/post windows) with small AOI
+- Output shape: pre_window, post_window, pre_area, post_area, delta_area, delta_percent, quality_tag
+- Degrade path: dual-window comparison -> single change metric summary
+- Note: do NOT remove AOI by default; large/global region is usually slower.
+- Note: "no manual range" should mean "auto-derived small AOI", not global computation.
+
+Minimal runnable path:
+- Resolve Shenzhen Nanshan AOI from `FAO/GAUL/2015/level2` via alias-safe filters on `ADM0_NAME`/`ADM1_NAME`/`ADM2_NAME`.
+- Select a primary pass (ASCENDING or DESCENDING) based on AOI collection availability.
+- Expand pre/post windows progressively until minimum image count is met, then build median composites.
+- Compute same-definition water masks for pre/post and derive new inundation plus net change metrics.
+- Keep all boolean branching server-side compatible for both JavaScript and Python backends.
+
+Cross-language robustness (generalization guardrails):
+- JavaScript reference uses methods like `.and()` / `.not()` on boolean images and booleans; Python generators must translate these safely when target object is a computed scalar/object.
+- For Python code generation, use this decision pattern:
+  1) compute server-side counts/flags as `ee.Number` or `ee.Algorithms.IsEqual` results,
+  2) branch with `ee.Algorithms.If`,
+  3) avoid Python-native boolean evaluation on deferred `ee` objects.
+- If backend reports `AttributeError: 'ComputedObject' object has no attribute 'Not'`, treat as a hard rule violation and regenerate logic with explicit `ee.Algorithms.If` branching.
+
+Reference JavaScript snippet (GEE Code Editor):
+```javascript
+var gaul2 = ee.FeatureCollection('FAO/GAUL/2015/level2');
+var cnGd = gaul2
+  .filter(ee.Filter.eq('ADM0_NAME', 'China'))
+  .filter(ee.Filter.eq('ADM1_NAME', 'Guangdong'));
+var nanshanExact = cnGd.filter(ee.Filter.inList('ADM2_NAME', ['Nanshan', 'Nanshan Qu', 'Nan Shan', '南山区', '南山']));
+var nanshanFuzzy = cnGd.filter(ee.Filter.or(
+  ee.Filter.stringContains('ADM2_NAME', 'Nanshan'),
+  ee.Filter.stringContains('ADM2_NAME', '南山')
+));
+var nanshanFc = ee.FeatureCollection(ee.Algorithms.If(nanshanExact.size().gt(0), nanshanExact, nanshanFuzzy));
+var finalCount = nanshanFc.size();
+print('boundary_asset', 'FAO/GAUL/2015/level2');
+print('candidate_count', cnGd.size());
+print('final_count', finalCount);
+var aoi = ee.Feature(nanshanFc.first()).geometry();
+
+var preStart = '2020-05-01';
+var preEnd = '2020-05-20';
+var postStart = '2020-06-01';
+var postEnd = '2020-06-20';
+var minImagesPerPeriod = 3; // recommended minimum for stable comparison
+var expandStepsDays = [0, 7, 14, 21, 30, 45, 60, 90]; // auto window expansion steps
+
+var s1Base = ee.ImageCollection('COPERNICUS/S1_GRD')
+  .filterBounds(aoi)
+  .filter(ee.Filter.eq('instrumentMode', 'IW'))
+  .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
+  .select('VV');
+
+var s1Desc = s1Base.filter(ee.Filter.eq('orbitProperties_pass', 'DESCENDING'));
+var s1Asc = s1Base.filter(ee.Filter.eq('orbitProperties_pass', 'ASCENDING'));
+
+var s1BaseCount = s1Base.size();
+print('s1_total_count_in_aoi', s1BaseCount);
+print('s1_desc_count_in_aoi', s1Desc.size());
+print('s1_asc_count_in_aoi', s1Asc.size());
+
+var primaryPass = ee.String(ee.Algorithms.If(s1Asc.size().gte(s1Desc.size()), 'ASCENDING', 'DESCENDING'));
+var primaryCol = ee.ImageCollection(ee.Algorithms.If(s1Asc.size().gte(s1Desc.size()), s1Asc, s1Desc));
+print('selected_primary_pass', primaryPass);
+print(
+  's1_time_range_in_aoi',
+  ee.Algorithms.If(
+    s1BaseCount.gt(0),
+    ee.String(ee.Date(s1Base.aggregate_min('system:time_start')).format('YYYY-MM-dd'))
+      .cat(' to ')
+      .cat(ee.Date(s1Base.aggregate_max('system:time_start')).format('YYYY-MM-dd')),
+    'NO_DATA_IN_AOI'
+  )
+);
+
+function pickExpandedWindow(collection, startDate, endDate, minCount, stepsDays) {
+  var s = ee.Date(startDate);
+  var e = ee.Date(endDate);
+  var attempts = ee.List(stepsDays).map(function(step) {
+    var d = ee.Number(step);
+    var ws = s.advance(d.multiply(-1), 'day');
+    var we = e.advance(d, 'day');
+    var cnt = collection.filterDate(ws, we).size();
+    return ee.Dictionary({
+      expand_days: d,
+      start_ms: ws.millis(),
+      end_ms: we.millis(),
+      start_date: ws.format('YYYY-MM-dd'),
+      end_date: we.format('YYYY-MM-dd'),
+      count: cnt
+    });
+  });
+
+  var initState = ee.Dictionary({
+    found: false,
+    selected: null
+  });
+
+  var pickedState = ee.Dictionary(attempts.iterate(function(item, state) {
+    state = ee.Dictionary(state);
+    var found = state.get('found');
+    var candidate = ee.Dictionary(item);
+    var enough = ee.Number(candidate.get('count')).gte(minCount);
+    return ee.Algorithms.If(
+      found,
+      state,
+      ee.Algorithms.If(
+        enough,
+        ee.Dictionary({
+          found: true,
+          selected: candidate
+        }),
+        state
+      )
+    );
+  }, initState));
+
+  return ee.Dictionary(ee.Algorithms.If(
+    pickedState.get('found'),
+    pickedState.get('selected'),
+    attempts.get(-1)
+  ));
+}
+
+function buildRobustComposite(startDate, endDate, bandName) {
+  var primaryWindow = pickExpandedWindow(primaryCol, startDate, endDate, minImagesPerPeriod, expandStepsDays);
+  var primaryWindowCount = ee.Number(primaryWindow.get('count'));
+  var usePrimary = primaryWindowCount.gte(minImagesPerPeriod);
+
+  var fallbackWindow = pickExpandedWindow(s1Base, startDate, endDate, minImagesPerPeriod, expandStepsDays);
+  var finalWindow = ee.Dictionary(ee.Algorithms.If(usePrimary, primaryWindow, fallbackWindow));
+  var finalCollectionBase = ee.ImageCollection(ee.Algorithms.If(usePrimary, primaryCol, s1Base));
+  var finalStart = ee.Date(finalWindow.get('start_ms'));
+  var finalEnd = ee.Date(finalWindow.get('end_ms'));
+  var finalCollection = finalCollectionBase.filterDate(finalStart, finalEnd);
+  var finalCount = finalCollection.size();
+
+  // Keep a valid single-band image even when no image is available.
+  var image = ee.Image(ee.Algorithms.If(
+    finalCount.gt(0),
+    finalCollection.median(),
+    ee.Image.constant(0).rename(bandName).updateMask(ee.Image(0))
+  ));
+
+  return {
+    image: image,
+    count: finalCount,
+    primaryCount: primaryWindowCount,
+    usedPrimaryPassOnly: usePrimary,
+    passMode: ee.Algorithms.If(usePrimary, primaryPass, 'BOTH_PASSES_FALLBACK'),
+    expandDays: finalWindow.get('expand_days'),
+    effectiveStart: finalWindow.get('start_date'),
+    effectiveEnd: finalWindow.get('end_date')
+  };
+}
+
+var preBundle = buildRobustComposite(preStart, preEnd, 'VV');
+var postBundle = buildRobustComposite(postStart, postEnd, 'VV');
+var pre = preBundle.image;
+var post = postBundle.image;
+var preCount = preBundle.count;
+var postCount = postBundle.count;
+
+print('pre_image_count', preCount);
+print('pre_primary_pass_count_after_expand', preBundle.primaryCount);
+print('pre_pass_mode', preBundle.passMode); // primary orbit or fallback mode
+print('pre_expand_days', preBundle.expandDays);
+print('pre_effective_window', ee.String(preBundle.effectiveStart).cat(' to ').cat(ee.String(preBundle.effectiveEnd)));
+print('post_image_count', postCount);
+print('post_primary_pass_count_after_expand', postBundle.primaryCount);
+print('post_pass_mode', postBundle.passMode);
+print('post_expand_days', postBundle.expandDays);
+print('post_effective_window', ee.String(postBundle.effectiveStart).cat(' to ').cat(ee.String(postBundle.effectiveEnd)));
+
+var hasBothPeriods = preCount.gt(0).and(postCount.gt(0));
+var meetsMinCount = preCount.gte(minImagesPerPeriod).and(postCount.gte(minImagesPerPeriod));
+var isStrictPrimaryPassComparable = preBundle.usedPrimaryPassOnly.and(postBundle.usedPrimaryPassOnly);
+var qualityTag = ee.Algorithms.If(
+  hasBothPeriods.not(),
+  'BLOCKED_MISSING_PERIOD_DATA',
+  ee.Algorithms.If(
+    meetsMinCount.and(isStrictPrimaryPassComparable),
+    'GOOD',
+    ee.Algorithms.If(
+      meetsMinCount,
+      'WARN_MIXED_ORBIT_MODE',
+      'WARN_LOW_SAMPLE_COUNT'
+    )
+  )
+);
+
+var preWaterMask = ee.Image(ee.Algorithms.If(
+  hasBothPeriods,
+  pre.lt(-17).rename('water'),
+  ee.Image.constant(0).rename('water').updateMask(ee.Image(0))
+));
+
+var postWaterMask = ee.Image(ee.Algorithms.If(
+  hasBothPeriods,
+  post.lt(-17).rename('water'),
+  ee.Image.constant(0).rename('water').updateMask(ee.Image(0))
+));
+
+// New inundation = water in post period but not in pre period (same definition for both periods).
+var newFloodMask = postWaterMask.and(preWaterMask.not()).rename('new_flood');
+
+function areaKm2(maskImage, bandName) {
+  var sumM2 = maskImage.selfMask().multiply(ee.Image.pixelArea()).reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: aoi,
+    scale: 10,
+    maxPixels: 1e13
+  }).get(bandName);
+  return ee.Algorithms.If(sumM2, ee.Number(sumM2).divide(1e6), null);
+}
+
+var preArea = areaKm2(preWaterMask, 'water');
+var postArea = areaKm2(postWaterMask, 'water');
+var newFloodArea = areaKm2(newFloodMask, 'new_flood');
+
+var deltaWater = ee.Algorithms.If(
+  preArea,
+  ee.Algorithms.If(
+    postArea,
+    ee.Number(postArea).subtract(ee.Number(preArea)),
+    null
+  ),
+  null
+);
+
+var deltaWaterPercent = ee.Algorithms.If(
+  preArea,
+  ee.Algorithms.If(
+    ee.Number(preArea).gt(0),
+    ee.Algorithms.If(
+      postArea,
+      ee.Number(deltaWater).divide(ee.Number(preArea)).multiply(100),
+      null
+    ),
+    null
+  ),
+  null
+);
+
+print('quality_tag', qualityTag);
+print('is_strict_primary_pass_comparable', isStrictPrimaryPassComparable);
+print('pre_window', ee.String(preBundle.effectiveStart).cat(' to ').cat(ee.String(preBundle.effectiveEnd)));
+print('post_window', ee.String(postBundle.effectiveStart).cat(' to ').cat(ee.String(postBundle.effectiveEnd)));
+print('pre_area', preArea);
+print('post_area', postArea);
+print('delta_area', deltaWater);
+print('delta_percent', deltaWaterPercent);
+```
+
+Expected output:
+- Compact flood change report with fields: `pre_window`, `post_window`, `pre_area`, `post_area`, `delta_area`, `delta_percent` (plus optional quality diagnostics)
+
+Failure modes:
+- Inconsistent orbit/polarization filtering between periods leads to false change.
+- Threshold copied from another region without documenting uncertainty.
+- Python backend boolean misuse on deferred objects (for example `.Not()` or native `not/and/or`) causes `ComputedObject` attribute/runtime errors.
+- Missing period-count guards can propagate empty composites into downstream arithmetic and produce invalid flood metrics.
+- Rewriting GAUL path to `projects/...` aliases can break boundary inspect/load and cascade into null-geometry failures.
+- Using `USDOS/LSIB_SIMPLE/2017` for Shenzhen district AOI causes inevitable district-match failure and false `WARN_APPROX_AOI`.
+
+Promotion checklist:
+- [x] GEE Code Editor (JavaScript) native run passed
+- [x] agent execution passed
+- [x] frontend integration passed
+- [x] band / scale / reducer / unit verified
+- [x] output remains stable across reruns
+
+===
