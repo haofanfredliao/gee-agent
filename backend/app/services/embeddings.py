@@ -1,13 +1,20 @@
-"""Embeddings：文本向量化，供 Chroma 使用（OpenAI text-embedding-ada-002）。
+"""Embeddings：文本向量化，供 Chroma 使用。
 
-通过环境变量 OPENAI_API_KEY 调用 OpenAI API；
-API 不可用时自动回退为 hash 占位向量，保证整体服务不中断。
+默认使用本地 sentence-transformers 模型，避免没有 OPENAI_API_KEY 时退化成
+hash 占位向量。需要使用 OpenAI embedding 时，可设置
+EMBEDDING_PROVIDER=openai。
 """
+from functools import lru_cache
 import os
+from pathlib import Path
 from typing import List
 
-EMBED_MODEL = "text-embedding-ada-002"
-EMBED_DIM = 1536
+EMBEDDING_PROVIDER = os.environ.get("EMBEDDING_PROVIDER", "local").strip().lower()
+OPENAI_EMBED_MODEL = os.environ.get("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+LOCAL_EMBED_MODEL = os.environ.get("LOCAL_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+LOCAL_EMBED_DIM = 384
+OPENAI_EMBED_DIM = 1536
+EMBED_DIM = OPENAI_EMBED_DIM if EMBEDDING_PROVIDER == "openai" else LOCAL_EMBED_DIM
 
 
 def _get_client():
@@ -15,21 +22,68 @@ def _get_client():
     return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 
+@lru_cache(maxsize=1)
+def _get_local_model():
+    from sentence_transformers import SentenceTransformer
+
+    return SentenceTransformer(_resolve_local_model_path(), local_files_only=True)
+
+
+def _resolve_local_model_path() -> str:
+    configured = Path(LOCAL_EMBED_MODEL).expanduser()
+    if configured.exists():
+        return str(configured)
+
+    cache_root = (
+        Path.home()
+        / ".cache"
+        / "huggingface"
+        / "hub"
+        / "models--sentence-transformers--all-MiniLM-L6-v2"
+        / "snapshots"
+    )
+    if LOCAL_EMBED_MODEL == "sentence-transformers/all-MiniLM-L6-v2" and cache_root.exists():
+        snapshots = sorted(p for p in cache_root.iterdir() if p.is_dir())
+        if snapshots:
+            return str(snapshots[-1])
+
+    return LOCAL_EMBED_MODEL
+
+
+def _local_embeddings(texts: List[str]) -> List[List[float]]:
+    model = _get_local_model()
+    vectors = model.encode(
+        texts,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+    )
+    return [vec.astype(float).tolist() for vec in vectors]
+
+
+def _openai_embeddings(texts: List[str]) -> List[List[float]]:
+    resp = _get_client().embeddings.create(input=texts, model=OPENAI_EMBED_MODEL)
+    return [item.embedding for item in resp.data]
+
+
 def get_embedding(text: str) -> List[float]:
-    """将单条文本转为 1536 维向量（ada-002）。不可用时回退为 hash 占位。"""
-    try:
-        resp = _get_client().embeddings.create(input=[text], model=EMBED_MODEL)
-        return resp.data[0].embedding
-    except Exception:
-        return _hash_fallback(text)
+    """将单条文本转为语义向量。"""
+    return get_embeddings([text])[0]
 
 
 def get_embeddings(texts: List[str]) -> List[List[float]]:
-    """批量向量化，供 add_documents 使用。不可用时回退为 hash 占位。"""
+    """批量向量化，供 add_documents 使用。"""
+    if not texts:
+        return []
+    if EMBEDDING_PROVIDER == "openai":
+        try:
+            return _openai_embeddings(texts)
+        except Exception:
+            # Keep the app usable during demos if the API key/network is missing.
+            pass
     try:
-        resp = _get_client().embeddings.create(input=texts, model=EMBED_MODEL)
-        return [item.embedding for item in resp.data]
+        return _local_embeddings(texts)
     except Exception:
+        # Last-resort fallback: retrieval quality is poor, but the app remains up.
         return [_hash_fallback(t) for t in texts]
 
 

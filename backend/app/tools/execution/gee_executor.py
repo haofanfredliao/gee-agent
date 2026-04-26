@@ -11,10 +11,10 @@
 - 执行环境只预注入 `ee`（已初始化的 earthengine-api）和 `Map`（MockMap 对象），
   详见 sandbox/executor.py。
 """
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
-def execute_gee_snippet(code: str) -> Dict[str, Any]:
+def execute_gee_snippet(code: str, *, aoi_boundary_path: Optional[str] = None) -> Dict[str, Any]:
     """
     在预置 GEE 环境中执行 Python 代码片段。
 
@@ -26,6 +26,9 @@ def execute_gee_snippet(code: str) -> Dict[str, Any]:
     ----------
     code : str
         合法的 GEE Python 代码（不含 ee.Initialize / ee.Authenticate）。
+    aoi_boundary_path : Optional[str]
+        Local GeoJSON cache path prepared by the orchestrator. When provided,
+        generated code can call load_aoi_boundary() inside the sandbox.
 
     Returns
     -------
@@ -46,4 +49,4 @@ def execute_gee_snippet(code: str) -> Dict[str, Any]:
     except ImportError:
         return {"status": "error", "log": "earthengine-api 未安装", "tile_url": None, "layers": []}
 
-    return sandbox_run(code, ee)
+    return sandbox_run(code, ee, aoi_boundary_path=aoi_boundary_path)

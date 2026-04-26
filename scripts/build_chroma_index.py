@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT))
 
 DATA_DIR = ROOT / "gee_rag_data"
 SUPPORTED_SUFFIXES = {".txt", ".md", ".json", ".jsonl"}
+EXCLUDED_FILES = {"dataset_ids_common.txt"}
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
 BATCH_SIZE = 128
@@ -18,6 +19,8 @@ BATCH_SIZE = 128
 
 def iter_data_files() -> Iterable[Path]:
     for path in sorted(DATA_DIR.rglob("*")):
+        if path.name in EXCLUDED_FILES:
+            continue
         if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES:
             yield path
 
@@ -132,6 +135,14 @@ def parse_json_file(path: Path) -> List[Tuple[str, Dict[str, str]]]:
     return docs
 
 
+def extract_heading(section: str) -> str:
+    for line in section.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            return stripped.lstrip("#").strip()
+    return ""
+
+
 def parse_text_file(path: Path) -> List[Tuple[str, Dict[str, str]]]:
     with open(path, "r", encoding="utf-8") as f:
         text = f.read()
@@ -139,20 +150,29 @@ def parse_text_file(path: Path) -> List[Tuple[str, Dict[str, str]]]:
         return []
 
     sections = [x.strip() for x in re.split(r"\n={3,}\n", text) if x.strip()]
-    if len(sections) <= 1:
+    has_explicit_sections = len(sections) > 1
+    if not has_explicit_sections:
         sections = [text]
 
     docs: List[Tuple[str, Dict[str, str]]] = []
     for section_idx, section in enumerate(sections):
-        chunks = split_text(section)
+        if path.name == "gee_datasets_catalog.txt" and "Asset ID:" not in section:
+            continue
+        chunks = [section] if has_explicit_sections else split_text(section)
         for chunk_idx, chunk in enumerate(chunks):
+            metadata = {
+                "section_index": str(section_idx),
+                "chunk_index": str(chunk_idx),
+            }
+            if has_explicit_sections:
+                metadata["explicit_section"] = "true"
+                heading = extract_heading(section)
+                if heading:
+                    metadata["section_heading"] = heading
             docs.append(
                 (
                     chunk,
-                    {
-                        "section_index": str(section_idx),
-                        "chunk_index": str(chunk_idx),
-                    },
+                    metadata,
                 )
             )
     return docs

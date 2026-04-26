@@ -9,6 +9,21 @@
 """
 from typing import Any, Dict
 
+ASSET_ID_NORMALIZATION_MAP = {
+    "COPERNICUS/S2_SR": "COPERNICUS/S2_SR_HARMONIZED",
+    "COPERNICUS/S2_SR_HARMONIZED_HARMONIZED": "COPERNICUS/S2_SR_HARMONIZED",
+}
+
+
+def _normalize_asset_id(asset_id: str) -> str:
+    normalized = asset_id.strip()
+    for _ in range(3):
+        nxt = ASSET_ID_NORMALIZATION_MAP.get(normalized)
+        if not nxt or nxt == normalized:
+            break
+        normalized = nxt
+    return normalized
+
 
 def inspect_vector_asset(asset_id: str) -> Dict[str, Any]:
     """
@@ -28,18 +43,22 @@ def inspect_vector_asset(asset_id: str) -> Dict[str, Any]:
         return {"status": "error", "message": "GEE 未初始化", "asset_id": asset_id}
     try:
         import ee
-        fc = ee.FeatureCollection(asset_id)
+        normalized_asset_id = _normalize_asset_id(asset_id)
+        fc = ee.FeatureCollection(normalized_asset_id)
         first = fc.first()
         prop_names = first.propertyNames().getInfo()
         size = fc.size().getInfo()
         geom_type = first.geometry().type().getInfo()
-        return {
+        out = {
             "status": "ok",
-            "asset_id": asset_id,
+            "asset_id": normalized_asset_id,
             "property_names": prop_names,
             "feature_count": size,
             "geometry_type": geom_type,
         }
+        if normalized_asset_id != asset_id:
+            out["normalized_from"] = asset_id
+        return out
     except Exception as e:
         return {"status": "error", "message": str(e), "asset_id": asset_id}
 
@@ -62,7 +81,8 @@ def inspect_image_asset(asset_id: str) -> Dict[str, Any]:
         return {"status": "error", "message": "GEE 未初始化", "asset_id": asset_id}
     try:
         import ee
-        img = ee.Image(asset_id)
+        normalized_asset_id = _normalize_asset_id(asset_id)
+        img = ee.Image(normalized_asset_id)
         info = img.getInfo()
         bands = [b["id"] for b in info.get("bands", [])]
         # crs_transform = [x_scale, 0, x_origin, 0, y_scale, y_origin]
@@ -71,13 +91,16 @@ def inspect_image_asset(asset_id: str) -> Dict[str, Any]:
         for b in info.get("bands", []):
             ct = b.get("crs_transform")
             band_scales[b["id"]] = abs(ct[0]) if ct and len(ct) >= 1 else None
-        return {
+        out = {
             "status": "ok",
-            "asset_id": asset_id,
+            "asset_id": normalized_asset_id,
             "bands": bands,
             "scales": band_scales,
             "properties": info.get("properties", {}),
         }
+        if normalized_asset_id != asset_id:
+            out["normalized_from"] = asset_id
+        return out
     except Exception as e:
         return {"status": "error", "message": str(e), "asset_id": asset_id}
 
@@ -85,9 +108,54 @@ def inspect_image_asset(asset_id: str) -> Dict[str, Any]:
 def inspect_asset(asset_id: str) -> Dict[str, Any]:
     """
     自动判断 asset 类型并调用对应检查函数。
-    先尝试 FeatureCollection，失败则回退到 Image。
+    优先用 ee.data.getAsset 判型，避免不必要的双重失败重试。
     """
-    result = inspect_vector_asset(asset_id)
-    if result["status"] == "error":
-        result = inspect_image_asset(asset_id)
-    return result
+    normalized_asset_id = _normalize_asset_id(asset_id)
+    from backend.app.services.gee_client import init_gee_client
+    if not init_gee_client():
+        return {"status": "error", "message": "GEE 未初始化", "asset_id": asset_id}
+
+    try:
+        import ee
+        meta = ee.data.getAsset(normalized_asset_id)
+        asset_type = str(meta.get("type") or "").upper()
+    except Exception as e:
+        # Fail fast for missing/inaccessible assets instead of trying multiple loaders.
+        return {
+            "status": "error",
+            "message": str(e),
+            "asset_id": normalized_asset_id,
+            "normalized_from": asset_id if normalized_asset_id != asset_id else None,
+        }
+
+    if asset_type in {"TABLE", "FEATURE_COLLECTION"}:
+        return inspect_vector_asset(normalized_asset_id)
+    if asset_type == "IMAGE":
+        return inspect_image_asset(normalized_asset_id)
+    if asset_type == "IMAGE_COLLECTION":
+        try:
+            import ee
+            first = ee.ImageCollection(normalized_asset_id).first()
+            bands = first.bandNames().getInfo() if first is not None else []
+            return {
+                "status": "ok",
+                "asset_id": normalized_asset_id,
+                "asset_type": "IMAGE_COLLECTION",
+                "bands": bands or [],
+                "note": "ImageCollection inspected with lightweight first-image band check.",
+                "normalized_from": asset_id if normalized_asset_id != asset_id else None,
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": str(e),
+                "asset_id": normalized_asset_id,
+                "normalized_from": asset_id if normalized_asset_id != asset_id else None,
+            }
+
+    return {
+        "status": "error",
+        "message": f"Unsupported asset type: {asset_type or 'unknown'}",
+        "asset_id": normalized_asset_id,
+        "normalized_from": asset_id if normalized_asset_id != asset_id else None,
+    }

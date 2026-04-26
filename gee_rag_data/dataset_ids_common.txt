@@ -1,0 +1,36 @@
+# Curated common datasets for this project.
+# One dataset ID per line.
+
+# Optical imagery
+COPERNICUS/S2_SR_HARMONIZED
+COPERNICUS/S2_CLOUD_PROBABILITY
+LANDSAT/LC08/C02/T1_L2
+LANDSAT/LC09/C02/T1_L2
+MODIS/006/MOD13Q1
+
+# Land cover / land use
+ESA/WorldCover/v200
+GOOGLE/DYNAMICWORLD/V1
+MODIS/061/MCD12Q1
+Tsinghua/FROM-GLC/GAIA/v10
+
+# DEM / terrain
+USGS/SRTMGL1_003
+COPERNICUS/DEM/GLO30
+
+# Hydro / water
+JRC/GSW1_4/GlobalSurfaceWater
+
+# Climate / weather / precipitation
+UCSB-CHG/CHIRPS/DAILY
+ECMWF/ERA5_LAND/DAILY_AGGR
+NASA/GPM_L3/IMERG_V07
+
+# Night lights
+NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG
+
+# Administrative boundaries
+FAO/GAUL/2015/level0
+FAO/GAUL/2015/level1
+FAO/GAUL/2015/level2
+USDOS/LSIB/2017
