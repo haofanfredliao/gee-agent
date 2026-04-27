@@ -1,0 +1,151 @@
+## DRAFT: Hansen Forest Loss Area by Year
+
+Status: validating
+Priority: P2
+Category: paper_scene
+Confidence: medium
+Validation stage: frontend_passed
+
+Why this candidate:
+- 学术和政策分析里都常见，适合做森林变化的轻量复现。
+- 结果可以是年度损失面积表，适合纯文本输出。
+
+Suggested source:
+- Hansen Global Forest Change documentation
+- forest change examples from Earth Engine community
+
+## FEW_SHOT: Hansen Forest Loss Area by Year
+
+Intent: execution
+Task type: simple statistics
+Keywords: Hansen, forest loss, yearly area, change detection, pixel area
+
+User task pattern:
+"Use Hansen Global Forest Change data to summarize yearly forest loss area in my AOI, starting with a recent short period for fast response."
+
+Public datasets in this case:
+- UMD/hansen/global_forest_change_2022_v1_10
+
+Data availability note (must be surfaced to user):
+- Hansen forest-loss yearly statistics in this workflow are currently capped at 2022.
+- 2023, 2024, and 2025 yearly loss statistics are not available in this configured dataset version.
+- If user asks for 2023-2025, clearly explain the data-availability limit instead of fabricating values.
+
+Optional boundary or AOI source:
+- user provided AOI
+
+Auto-AOI strategy (when user does not specify range):
+- place name -> OSM or admin boundary resolve (default example place: Hong Kong)
+- fallback to current map context small AOI
+- if both unavailable, ask user for place name or AOI
+
+AOI consistency template (global, reusable):
+- preferred AOI source order:
+  1) user-provided geometry or asset ID
+  2) for Hong Kong district-level requests: `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`
+  3) OSM/Nominatim place boundary resolve (default example place: Hong Kong)
+  4) FAO/GAUL/2015/level2 (or equivalent accessible admin boundary)
+  5) current map context small AOI
+- do not depend on private or unverified assets unless access is confirmed.
+- when user explicitly confirms `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, treat it as verified primary source for Hong Kong district tasks.
+- if AOI resolution fails, first try documented fallback boundaries; if still unresolved, continue with a controlled approximate AOI and ask for clarification.
+  Do not return 0-area results as valid outputs when AOI is unresolved.
+  If diagnostics show final_count==0 or empty geometry, print `WARN_APPROX_AOI` and continue in degraded mode using controlled approximate AOI, and clearly report uncertainty.
+  Never coerce null/None statistics to 0 when AOI is unresolved.
+- in follow-up turns, keep prior AOI and method unless the user explicitly asks to change them.
+
+Boundary and AOI robustness guardrails:
+- Always keep and print `aoi_source` and `boundary_asset` metadata in execution outputs.
+- For admin-boundary lookup, use exact field match first, then controlled `stringContains` fallback in the same boundary dataset.
+- If boundary match count is 0, do not silently switch to unrelated boundary datasets; ask user or use documented fallback only.
+- Never replace the user-requested place/admin target with another district name; require explicit user confirmation before switching target.
+- If reduction output key is missing/null, retry once with a small buffered AOI and tag the metric source.
+- Never coerce missing statistics to 0; keep null/None and explain why.
+- Always print AOI diagnostics (`candidate_count`, `final_count`, and period `image_count`) before final summary.
+- For `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, preview both `NAME_EN` and `NAME_TC` before filtering.
+- For Hong Kong district-level matching, use alias-safe filters on real fields (English + Chinese aliases) instead of a single hardcoded district string.
+
+Critical rules (must follow):
+1) Before AOI selection, print boundary candidate names/counts with real fields, then do exact match and controlled fallback in the same dataset.
+2) Boundary asset lock: when GAUL is used, the asset path must be exactly `FAO/GAUL/2015/level2`; do not rewrite as `projects/...` aliases.
+3) If boundary inspect/load fails, output `BLOCKED_MISSING_BOUNDARY_ASSET` and stop this workflow before AOI geometry/materialization.
+4) Use the loss year encoding correctly instead of treating it as a continuous variable.
+5) Compute area from pixel area, not just counts.
+6) Default to recent short range first (<=3 years, e.g., 2020-2022); expand to full archive only when user explicitly asks.
+7) Before fixing end year, verify latest available lossyear in the selected Hansen version and cap to that year.
+8) In this RAG profile, cap endYear at 2022 and explicitly warn user that 2023-2025 Hansen yearly loss stats are unavailable.
+9) Cross-language safe logic is mandatory: never use Python native boolean operators (`not`, `and`, `or`, `!=`) on deferred `ee.*` objects.
+10) In Python outputs, never call `.Not()` on `ee.ComputedObject`; use `ee.Algorithms.If` with server-side comparisons.
+11) For each year, gate area reduction by server-side checks (AOI valid, encoded year valid, key exists); if missing, keep null instead of synthetic 0.
+
+Latency-first options:
+- Scope: recent 3 years first (recommended: 2020-2022), then full range only if requested
+- Output shape: year -> forest_loss_area_km2
+- Degrade path: full annual table -> recent 3-year table -> key years summary
+- Note: do NOT remove AOI by default; large/global region is usually slower.
+- Note: "no manual range" should mean "auto-derived small AOI", not global computation.
+
+Minimal runnable path:
+- Load the Hansen loss year band for the AOI.
+- Derive masks for each encoded loss year in a short recent window first.
+- Summarize annual forest loss area and return a compact year table.
+- Expand to longer period only when explicitly requested by user.
+- Keep all branch logic server-side compatible for both JavaScript and Python backends.
+
+Cross-language robustness (generalization guardrails):
+- JavaScript boolean/method style should not be copied verbatim into Python for deferred objects.
+- Python generators should follow: compute flags/counts server-side -> branch with `ee.Algorithms.If` -> avoid native Python boolean evaluation on `ee` objects.
+- If backend reports `AttributeError: 'ComputedObject' object has no attribute 'Not'`, treat as a hard rule violation and regenerate with explicit server-side branching.
+
+Reference JavaScript snippet (GEE Code Editor):
+```javascript
+var aoi = ee.Geometry.Rectangle([113.95, 22.28, 114.05, 22.38]); // replace if available
+var gfc = ee.Image('UMD/hansen/global_forest_change_2022_v1_10');
+var lossYear = gfc.select('lossyear');
+
+// Fast default: use recent short window first.
+var startYear = 2020;
+var endYear = 2022;
+var years = ee.List.sequence(startYear, endYear);
+
+var yearlyLoss = ee.FeatureCollection(years.map(function(y) {
+  y = ee.Number(y).toInt();
+  var encoded = y.subtract(2000); // Hansen lossyear encoding
+  var lossMask = lossYear.eq(encoded);
+
+  var areaM2 = lossMask.selfMask().multiply(ee.Image.pixelArea()).reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: aoi,
+    scale: 30,
+    maxPixels: 1e13
+  }).get('lossyear');
+
+  return ee.Feature(null, {
+    year: y,
+    forest_loss_area_km2: ee.Number(areaM2).divide(1e6)
+  });
+}));
+
+print('hansen_yearly_forest_loss', yearlyLoss);
+```
+
+Expected output:
+- Year -> forest loss area table (fast default: recent 3 years first)
+- If asked for 2023-2025, return explicit data-availability notice (no fabricated yearly values).
+
+Failure modes:
+- Misreading the loss year encoding.
+- Promoting the entry without re-checking the exact dataset version.
+- Using a long default year span (e.g., full archive) in first pass, causing slow/unstable execution.
+- Returning pseudo-values for 2023-2025 instead of reporting that this Hansen profile is capped at 2022.
+- Python boolean misuse on deferred objects (`.Not()` or native `not/and/or`) can break execution with `ComputedObject` errors.
+- Rewriting GAUL path to `projects/...` aliases can break boundary inspect/load and cascade into null-geometry failures.
+
+Promotion checklist:
+- [x] GEE Code Editor (JavaScript) 原生跑通
+- [x] agent execution 跑通
+- [x] 前后端联调跑通
+- [ ] band / scale / reducer / unit 已核实
+- [ ] 结果输出稳定
+
+===

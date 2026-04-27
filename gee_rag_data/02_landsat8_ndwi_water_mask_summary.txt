@@ -1,0 +1,178 @@
+## FEW_SHOT: Landsat 8 NDWI Water Mask Summary (Non-Interactive, Low-Latency First)
+
+Status: completed
+Priority: P1
+Category: case_study
+Confidence: high
+Validation stage: passed
+
+Intent: execution
+Task type: data preprocessing + simple statistics
+Keywords: Landsat 8 L2, NDWI, LANDSAT/LC08/C02/T1_L2, water mask, area statistics, low latency
+
+User task pattern:
+"Do a quick NDWI water-area summary for my area, non-interactive, and return only key numbers."
+
+Assets in this case:
+- Public image collection: LANDSAT/LC08/C02/T1_L2
+- AOI: user AOI, place-derived boundary, context AOI, or fixed small fallback rectangle
+
+Auto-AOI strategy (when user does not specify range):
+- place name -> OSM or admin boundary resolve (default example place: Hong Kong)
+- fallback to current map context small AOI
+- if both unavailable, ask user for place name or AOI
+
+AOI consistency template (global, reusable):
+- preferred AOI source order:
+  1) user-provided geometry or asset ID
+  2) for Hong Kong district-level requests: `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`
+  3) OSM/Nominatim place boundary resolve (default example place: Hong Kong)
+  4) FAO/GAUL/2015/level2 (or equivalent accessible admin boundary)
+  5) current map context small AOI
+- do not depend on private or unverified assets unless access is confirmed.
+- when user explicitly confirms `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, treat it as verified primary source for Hong Kong district tasks.
+- if AOI resolution fails, first try documented fallback boundaries; if still unresolved, continue with a controlled approximate AOI and ask for clarification.
+  Do not return 0-area results as valid outputs when AOI is unresolved.
+  If diagnostics show final_count==0 or empty geometry, print `WARN_APPROX_AOI` and continue in degraded mode using controlled approximate AOI, and clearly report uncertainty.
+  Never coerce null/None statistics to 0 when AOI is unresolved.
+- in follow-up turns, keep prior AOI and method unless the user explicitly asks to change them.
+
+Boundary and AOI robustness guardrails:
+- Always keep and print `aoi_source` and `boundary_asset` metadata in execution outputs.
+- For admin-boundary lookup, use exact field match first, then controlled `stringContains` fallback in the same boundary dataset.
+- If boundary match count is 0, do not silently switch to unrelated boundary datasets; ask user or use documented fallback only.
+- Never replace the user-requested place/admin target with another district name; require explicit user confirmation before switching target.
+- If reduction output key is missing/null, retry once with a small buffered AOI and tag the metric source.
+- Never coerce missing statistics to 0; keep null/None and explain why.
+- Always print AOI diagnostics (`candidate_count`, `final_count`, and period `image_count`) before final summary.
+- For `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, preview both `NAME_EN` and `NAME_TC` before filtering.
+- For Hong Kong district-level matching, use alias-safe filters on real fields (English + Chinese aliases) instead of a single hardcoded district string.
+
+Critical rules (must follow):
+1) Before AOI selection, print boundary candidate names/counts with real fields, then do exact match and controlled fallback in the same dataset.
+2) Apply Landsat L2 official scale factors before index calculation.
+   - optical: `SR_B* * 0.0000275 + (-0.2)`
+   - thermal: `ST_B* * 0.00341802 + 149.0`
+3) NDWI uses Green vs NIR only: `normalizedDifference(['SR_B3', 'SR_B5'])`.
+4) `reduceRegion` runs on `ee.Image`, not on `ee.ImageCollection`.
+5) In sandbox, do not use `Map.getCenter()` / `Map.getBounds()` for geometry.
+6) Non-interactive output only: print numeric summaries.
+7) Before fixing endDate, inspect collection availability and cap to the latest complete period available in the dataset.
+8) Never use `ee.Date(None)` for "current time" in Python, and do not use JavaScript-style `Date.now()` in Python (`name 'Date' is not defined`).
+9) For "recent weeks" requests, derive effective `end_date` from collection availability (for example `aggregate_max('system:time_start')`) and print `start_date`, `end_date`, `image_count`.
+10) If no image exists in AOI/time window, print `BLOCKED_MISSING_PERIOD_DATA` and stop before NDWI/water-area reduction.
+11) AOI final selection must be two-stage fallback, not merge-add:
+    - if `exact_match_count > 0`, use `exact_match` as final AOI set;
+    - else use `contains_match`.
+    Do not merge exact+contains for final AOI counting, to avoid duplicated matches (e.g. `final_count: 2` for one district).
+12) Python reducer compatibility rule:
+    - do not use `Reducer.combine(..., outputNames=...)` in Python earthengine-api (unsupported in this runtime);
+    - do not use combined reducers that emit duplicate output names.
+    Prefer one of:
+    a) single `reduceRegion` with `ee.Reducer.mean()` / `ee.Reducer.minMax()` separately, or
+    b) map to per-image properties then use `aggregate_mean` for `mean_ndwi` and `water_area_km2`.
+13) For this task, strict non-interactive output:
+    never call `Map.addLayer`; only print `image_count`, `ndwi_mean`, `water_area_km2` (optional min/max).
+
+Latency-first options:
+- Scope: 2-4 week window first
+- Output shape: image_count, ndwi_mean, ndwi_min, ndwi_max, water_area_km2
+- Degrade path: full stats + area -> area and mean only
+- Note: do NOT remove AOI by default; large/global region is usually slower.
+- Note: "no manual range" should mean "auto-derived small AOI", not global computation.
+
+Minimal runnable path:
+- Resolve AOI using exact-first fallback (no exact+contains merge for final set).
+- Filter Landsat 8 L2 by AOI/date and apply scale factors.
+- Build median composite and derive NDWI.
+- Output NDWI stats and threshold-based water area.
+- In Python, avoid `Reducer.combine` naming conflicts by using separate reducers or `aggregate_mean` on mapped properties.
+- In Python, avoid placeholder "now" APIs; use dataset-derived end date or explicit date strings.
+
+Positive ReAct trajectory:
+- Observe:
+  - confirm AOI source and short date window
+  - confirm Landsat L2 dataset and scaling requirement
+- Think:
+  - scale L2 bands first
+  - convert collection to median image for reduction
+- Act:
+  - filter collection
+  - compute NDWI
+  - output `image_count`, `ndwi_mean/min/max`, `water_area_km2`
+
+Reference JavaScript snippet (GEE Code Editor):
+```javascript
+var aoi = ee.Geometry.Rectangle([113.95, 22.28, 114.05, 22.38]);
+var startDate = '2022-05-01';
+var endDate = '2022-05-20';
+
+var dataset = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+  .filterBounds(aoi)
+  .filterDate(startDate, endDate)
+  .filter(ee.Filter.lt('CLOUD_COVER', 50));
+
+function applyScaleFactors(image) {
+  var opticalBands = image.select('SR_B.').multiply(0.0000275).add(-0.2);
+  var thermalBands = image.select('ST_B.*').multiply(0.00341802).add(149.0);
+  return image.addBands(opticalBands, null, true)
+              .addBands(thermalBands, null, true);
+}
+
+var scaled = dataset.map(applyScaleFactors);
+var imageCount = scaled.size();
+var composite = scaled.median();
+var ndwi = composite.normalizedDifference(['SR_B3', 'SR_B5']).rename('NDWI');
+
+var ndwiStats = ndwi.reduceRegion({
+  reducer: ee.Reducer.mean().combine({
+    reducer2: ee.Reducer.minMax(),
+    sharedInputs: true
+  }),
+  geometry: aoi,
+  scale: 30,
+  maxPixels: 1e13
+});
+
+var waterMask = ndwi.gt(0.1);
+var waterAreaM2 = waterMask.selfMask().multiply(ee.Image.pixelArea()).reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: aoi,
+  scale: 30,
+  maxPixels: 1e13
+}).get('NDWI');
+
+print('image_count', imageCount);
+print('ndwi_mean', ndwiStats.get('NDWI_mean'));
+print('ndwi_min', ndwiStats.get('NDWI_min'));
+print('ndwi_max', ndwiStats.get('NDWI_max'));
+print('water_area_km2', ee.Number(waterAreaM2).divide(1e6));
+```
+
+Anti-patterns to avoid:
+- Forgetting L2 scale factors causes biased NDWI values.
+- Calling `reduceRegion` on `ImageCollection` directly.
+- Using wrong NDWI bands (must be SR_B3 and SR_B5).
+- Deriving geometry from `Map` object in sandbox.
+- Switching dataset to Sentinel-2.
+- Using `ee.Date(None)` or `ee.Date(Date.now())` in Python.
+- Merging exact and contains AOI matches into final set, which can inflate `final_count`.
+- Using `Reducer.combine` in Python with unsupported arguments (`outputNames`) or duplicate output names (`mean`, `mean_1` ambiguity).
+
+Expected behavior for this pattern:
+- Returns stable summary outputs: `image_count`, `ndwi_mean`, `ndwi_min`, `ndwi_max`, `water_area_km2`.
+- Works with natural prompt variants (quick water mask / NDWI area / no map summary).
+
+Generalization cues:
+- "快速看水体范围" / "最近几周水体面积"
+- "不要地图，只要 NDWI 和面积结果"
+- "给我水体指数和面积统计"
+
+Promotion checklist:
+- [x] GEE Code Editor (JavaScript) native run passed
+- [x] agent execution passed
+- [x] frontend integration passed
+- [x] band / scale / reducer / unit verified
+- [x] output remains stable across reruns
+
+===

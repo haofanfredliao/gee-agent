@@ -14,7 +14,7 @@ Assets in this case:
 Critical rules (must follow):
 1) Use inspect metadata to set sampling scale.
    - Preferred: use image nominal scale from inspect output.
-   - Fallback: us e projection nominal scale from the first band.
+   - Fallback: use projection nominal scale from the first band.
    - Do not hardcode 30 when source data is 10 m.
 2) Do not swap actual and predicted in errorMatrix.
    - actual = class from reference land-use map sampled to points.

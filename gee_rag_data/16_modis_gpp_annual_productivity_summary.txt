@@ -1,0 +1,179 @@
+## DRAFT: MODIS GPP Annual Productivity Summary
+
+Status: draft
+Priority: P0
+Category: paper_scene
+Confidence: high
+Validation stage: not_started
+
+Why this candidate:
+- GPP is a core productivity metric widely used in ecology coursework and research replication.
+- It fits non-interactive execution: output annual/seasonal statistics tables instead of map rendering.
+- It complements existing NDVI-focused entries and avoids duplication with LST, precipitation, WorldCover, ERA5, SAR, and nightlights cases.
+
+Suggested source:
+- Google Earth Engine dataset docs and official examples for MODIS GPP
+- GEE case-study style workflows (simplified to summary outputs)
+- gishub/GEE open notebooks for MODIS time-series aggregation
+- Wuqiusheng and related open academic repos that use MODIS productivity indicators
+
+## FEW_SHOT: MODIS GPP Annual Productivity Summary for an AOI
+
+Intent: execution
+Task type: simple statistics
+Keywords: MODIS, GPP, productivity, annual summary, ecology, coursework, non-interactive
+
+User task pattern:
+"Use MODIS GPP to estimate annual vegetation productivity in my AOI and return a compact yearly table."
+
+Public datasets in this case:
+- MODIS/006/MOD17A3HGF
+- MODIS/061/MOD17A3HGF (if available in runtime)
+
+Optional boundary or AOI source:
+- user provided AOI
+
+Auto-AOI strategy (when user does not specify range):
+- place name -> OSM or admin boundary resolve (default example place: Hong Kong)
+- fallback to current map context small AOI
+- if both unavailable, ask user for place name or AOI
+
+AOI consistency template (global, reusable):
+- preferred AOI source order:
+  1) user-provided geometry or asset ID
+  2) for Hong Kong district-level requests: `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`
+  3) OSM/Nominatim place boundary resolve (default example place: Hong Kong)
+  4) FAO/GAUL/2015/level2 (or equivalent accessible admin boundary)
+  5) current map context small AOI
+- do not depend on private or unverified assets unless access is confirmed.
+- when user explicitly confirms `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, treat it as verified primary source for Hong Kong district tasks.
+- Hong Kong boundary policy: prefer the confirmed private HK boundary asset first; if inspect/load fails or access is denied, fallback to `FAO/GAUL/2015/level2` in the same run.
+- if AOI resolution fails, first try documented fallback boundaries; if still unresolved, continue with a controlled approximate AOI and ask for clarification.
+  Do not return 0-area results as valid outputs when AOI is unresolved.
+  If diagnostics show final_count==0 or empty geometry, print `WARN_APPROX_AOI` and continue in degraded mode using controlled approximate AOI, and clearly report uncertainty.
+  Never coerce null/None statistics to 0 when AOI is unresolved.
+- in follow-up turns, keep prior AOI and method unless the user explicitly asks to change them.
+
+Boundary and AOI robustness guardrails:
+- Always keep and print `aoi_source` and `boundary_asset` metadata in execution outputs.
+- For admin-boundary lookup, use exact field match first, then controlled `stringContains` fallback in the same boundary dataset.
+- If boundary match count is 0, do not silently switch to unrelated boundary datasets; ask user or use documented fallback only.
+- Never replace the user-requested place/admin target with another district name; require explicit user confirmation before switching target.
+- If reduction output key is missing/null, retry once with a small buffered AOI and tag the metric source.
+- Never coerce missing statistics to 0; keep null/None and explain why.
+- Always print AOI diagnostics (`candidate_count`, `final_count`, and period `image_count`) before final summary.
+- For Hong Kong district-level tasks, prefer `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary` and filter district name aliases safely.
+- For Central and Western requests, include aliases such as `Central and Western`, `Central and Western District`, `中西區`, `中西区`.
+- For `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, preview both `NAME_EN` and `NAME_TC` before filtering.
+- For Hong Kong district-level matching, use alias-safe filters on real fields (English + Chinese aliases) instead of a single hardcoded district string.
+
+Critical rules (must follow):
+1) Before AOI selection, print boundary candidate names/counts with real fields, then do exact match and controlled fallback in the same dataset.
+2) Boundary asset lock: for Hong Kong district requests, use `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary` as primary boundary asset.
+   If this asset inspect/load fails, fallback to `FAO/GAUL/2015/level2` (do not switch to other private/custom assets).
+3) Output `BLOCKED_MISSING_BOUNDARY_ASSET` only when both private HK boundary and GAUL fallback inspect/load fail.
+4) Use MOD17A3HGF annual product. For this case, prefer `Gpp` as the target metric band.
+   Never directly read `stats.get('Npp')` unless runtime checks confirm both band existence and reducer output key existence.
+   If `Gpp` is unavailable, perform null-safe fallback from inspected bands; if no valid metric band exists, keep `mean_gpp` as null and explain.
+5) Keep output non-interactive: no map layers, no geemap UI dependence, text/table only.
+6) Return year-level (or quarter-level) productivity summaries with clear period definition.
+7) Do not substitute NDVI/EVI as a fake GPP proxy in this case.
+8) Avoid overlap with existing NDVI monthly summary by focusing on productivity metric semantics.
+9) Default to recent short period and small AOI for first response, then expand on request.
+10) For user window like 2020-01-01 to 2022-12-31, ensure year coverage is complete by using `calendarRange` on year or an end-exclusive upper bound to next year start (e.g. 2023-01-01).
+    Always print per-year `image_count`; if a year has 0 images, keep the year row and set `mean_gpp` to null.
+    Before yearly reduction, always print `band_names` and `selected_band` for runtime diagnostics.
+11) Output contract for this case is strictly tabular fields: `year`, `mean_gpp`, `image_count`.
+    Do not drop rows with null `mean_gpp`, and never coerce null/None to 0.
+    `image_count` follows the same rule: if unavailable/missing keep null/None, do not backfill with 0.
+12) Avoid positional band guessing (`bandNames().get(0)`) for final metric extraction.
+    Use named-band priority (`Gpp` first), then dictionary `contains(key)` guard before `get(key)`.
+
+Latency-first options:
+- Scope: recent 3 years first, then expand if requested
+- Output shape: year -> mean_gpp, image_count
+- Degrade path: annual table -> single multi-year mean summary
+- Fast default: first pass returns year -> mean_gpp (+ image_count) only; min/max in second pass if needed.
+- Scale guidance: use 500 m scale aligned with MOD17 product for stable, fast reductions.
+- Note: do NOT remove AOI by default; large/global region is usually slower.
+- Note: "no manual range" should mean "auto-derived small AOI", not global computation.
+
+Minimal runnable path:
+- Resolve target HK district AOI (for this query: Central and Western) from `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary` with alias-safe district matching.
+- Load MOD17A3HGF annual collection and inspect/select productivity band with explicit priority (`Gpp` first).
+- Aggregate by year in requested window and compute per-year regional mean plus `image_count`.
+- Return compact table with fields `year`, `mean_gpp`, `image_count`.
+
+Reference JavaScript snippet (GEE Code Editor):
+```javascript
+var aoi = ee.Geometry.Rectangle([113.95, 22.28, 114.05, 22.38]); // replace if available
+var startYear = 2020;
+var endYear = 2022; // fast default window
+
+var annualCol = ee.ImageCollection('MODIS/006/MOD17A3HGF')
+  .filterBounds(aoi)
+  .filter(ee.Filter.calendarRange(startYear, endYear, 'year'));
+
+var bandNames = ee.List(annualCol.first().bandNames());
+var selectedBand = ee.String(ee.Algorithms.If(
+  bandNames.contains('Gpp'),
+  'Gpp',
+  ee.Algorithms.If(bandNames.contains('Npp'), 'Npp', 'NO_VALID_BAND')
+));
+
+print('band_names', bandNames);
+print('selected_band', selectedBand);
+
+var years = ee.List.sequence(startYear, endYear);
+
+var gppSeries = ee.FeatureCollection(years.map(function(y) {
+  y = ee.Number(y).toInt();
+  var start = ee.Date.fromYMD(y, 1, 1);
+  var end = start.advance(1, 'year');
+  var annual = annualCol.filterDate(start, end);
+  var imageCount = annual.size();
+
+  var stats = ee.Dictionary(
+    ee.Algorithms.If(
+      imageCount.gt(0),
+      annual.mean().select([selectedBand]).reduceRegion({
+        reducer: ee.Reducer.mean(),
+        geometry: aoi,
+        scale: 500,
+        maxPixels: 1e13
+      }),
+      ee.Dictionary({})
+    )
+  );
+
+  return ee.Feature(null, {
+    year: y,
+    image_count: imageCount,
+    mean_gpp: ee.Algorithms.If(stats.contains(selectedBand), stats.get(selectedBand), null)
+  });
+}));
+
+print('modis_gpp_yearly_summary', gppSeries);
+```
+
+Expected output:
+- Yearly GPP summary table (year, mean_gpp, image_count)
+
+Failure modes:
+- Forgetting product scale factor or unit notes causes wrong magnitude.
+- Mixing temporal aggregation logic without defining annual boundaries.
+- Rewriting GAUL path to `projects/...` aliases can break boundary inspect/load and cascade into null-geometry failures.
+- Continuing reductions after both boundary attempts fail (without `BLOCKED_MISSING_BOUNDARY_ASSET`) can produce invalid AOI-based outputs.
+- Blocking immediately on private HK boundary failure without trying GAUL fallback causes avoidable task failure.
+- Reading reducer output with an unchecked key (for example direct `stats.get('Npp')`) can fail with `Dictionary does not contain key`.
+- Using positional band extraction (for example `bandNames().get(0)`) can bind to a non-target band and cause wrong/missing dictionary keys.
+- Using `filterDate('2020-01-01', '2022-12-31')` without year-safe handling may miss the intended terminal-year output in some annual products.
+
+Promotion checklist:
+- [ ] GEE Code Editor (JavaScript) native run passed
+- [ ] agent execution passed
+- [ ] frontend integration passed
+- [ ] band / scale / reducer / unit verified
+- [ ] output remains stable across reruns
+
+===

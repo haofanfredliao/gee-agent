@@ -1,0 +1,185 @@
+## FEW_SHOT: SRTM Elevation and Slope Statistics
+
+Status: completed
+Priority: P1
+Category: case_study
+Confidence: high
+Validation stage: passed
+
+Intent: execution
+Task type: simple statistics
+Keywords: SRTM, elevation, slope, terrain, reduceRegion, DEM
+
+User task pattern:
+"Use SRTM DEM to summarize elevation and slope statistics for my AOI."
+
+Assets in this case:
+- USGS/SRTMGL1_003
+- user provided AOI
+
+Auto-AOI strategy (when user does not specify range):
+- place name -> OSM or admin boundary resolve (default example place: Hong Kong)
+- fallback to current map context small AOI
+- if both unavailable, ask user for place name or AOI
+
+AOI consistency template (global, reusable):
+- preferred AOI source order:
+  1) user-provided geometry or asset ID
+  2) for Hong Kong district-level requests: `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`
+  3) OSM/Nominatim place boundary resolve (default example place: Hong Kong)
+  4) FAO/GAUL/2015/level2 (or equivalent accessible admin boundary)
+  5) current map context small AOI
+- do not depend on private or unverified assets unless access is confirmed.
+- when user explicitly confirms `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, treat it as verified primary source for Hong Kong district tasks.
+- if AOI resolution fails, first try documented fallback boundaries; if still unresolved, continue with a controlled approximate AOI and ask for clarification.
+  Do not return 0-area results as valid outputs when AOI is unresolved.
+  If diagnostics show final_count==0 or empty geometry, print `WARN_APPROX_AOI` and continue in degraded mode using controlled approximate AOI, and clearly report uncertainty.
+  Never coerce null/None statistics to 0 when AOI is unresolved.
+- in follow-up turns, keep prior AOI and method unless the user explicitly asks to change them.
+
+Boundary and AOI robustness guardrails:
+- Always keep and print `aoi_source` and `boundary_asset` metadata in execution outputs.
+- For admin-boundary lookup, use exact field match first, then controlled `stringContains` fallback in the same boundary dataset.
+- If boundary match count is 0, do not silently switch to unrelated boundary datasets; ask user or use documented fallback only.
+- Never replace the user-requested place/admin target with another district name; require explicit user confirmation before switching target.
+- If reduction output key is missing/null, retry once with a small buffered AOI and tag the metric source.
+- Never coerce missing statistics to 0; keep null/None and explain why.
+- Always print AOI diagnostics (`candidate_count`, `final_count`, and period `image_count`) before final summary.
+- For `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, preview both `NAME_EN` and `NAME_TC` before filtering.
+- For Hong Kong district-level matching, use alias-safe filters on real fields (English + Chinese aliases) instead of a single hardcoded district string.
+
+Critical rules (must follow):
+1) Before AOI selection, print boundary candidate names/counts with real fields, then do exact match and controlled fallback in the same dataset.
+2) Use a suitable scale consistent with the DEM resolution.
+3) Return numeric summary values instead of only rendering terrain layers.
+4) In Python execution output, materialize the final reduction dictionary once via `.getInfo()` before print.
+   - Do not print `ee.Dictionary` members directly (will show `ComputedObject` references).
+   - Do not call `.getInfo()` inside loops.
+5) If `final_count==0`, print `WARN_APPROX_AOI` and continue terrain reduction in degraded mode with uncertainty annotation.
+6) Do not use `bestEffort=True` for this task; fix AOI and scale/maxPixels explicitly.
+7) Do not format `None` with numeric formatters (`:.2f`) directly; render nullable values safely.
+Output shape: `elevation_mean`, `elevation_min`, `elevation_max`, `slope_mean`, `slope_min`, `slope_max`.
+
+Positive ReAct trajectory:
+- Observe:
+  - confirm AOI is available
+  - confirm DEM dataset and reduction scale
+- Think:
+  - derive slope from DEM first
+  - define numeric outputs (elevation + slope statistics)
+- Act:
+  - load DEM
+  - compute slope
+  - reduce both elevation and slope with mean/min/max
+
+Reference JavaScript snippet (GEE Code Editor):
+```javascript
+var aoi = ee.Geometry.Rectangle([113.95, 22.28, 114.05, 22.38]); // replace if available
+var dem = ee.Image('USGS/SRTMGL1_003');
+var slope = ee.Terrain.slope(dem);
+
+var demStats = dem.reduceRegion({
+  reducer: ee.Reducer.mean().combine({
+    reducer2: ee.Reducer.minMax(),
+    sharedInputs: true
+  }),
+  geometry: aoi,
+  scale: 30,
+  maxPixels: 1e13
+});
+
+var slopeStats = slope.reduceRegion({
+  reducer: ee.Reducer.mean().combine({
+    reducer2: ee.Reducer.minMax(),
+    sharedInputs: true
+  }),
+  geometry: aoi,
+  scale: 30,
+  maxPixels: 1e13
+});
+
+print('dem_stats', demStats);
+print('slope_stats', slopeStats);
+```
+
+Reference Python snippet (earthengine-api):
+```python
+districts = ee.FeatureCollection('projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary')
+print('boundary_asset', 'projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary')
+print('candidate_count', districts.size().getInfo())
+print('name_en_preview', districts.aggregate_array('NAME_EN').getInfo())
+
+target_en = ['Central & Western', 'Central and Western', 'Central and Western District']
+target_tc = ['中西區', '中西区']
+aoi_fc = districts.filter(
+    ee.Filter.Or(
+        ee.Filter.inList('NAME_EN', target_en),
+        ee.Filter.inList('NAME_TC', target_tc)
+    )
+)
+final_count = aoi_fc.size().getInfo()
+print('final_count', final_count)
+if final_count == 0:
+    print('WARN_APPROX_AOI')
+    print('WARN_APPROX_AOI_CONTINUE_DEGRADED')
+
+aoi = aoi_fc.geometry()
+dem = ee.Image('USGS/SRTMGL1_003')
+slope = ee.Terrain.slope(dem).rename('slope')
+combined = dem.select('elevation').addBands(slope)
+
+stats = combined.reduceRegion(
+    reducer=ee.Reducer.mean().combine(
+        reducer2=ee.Reducer.min(),
+        sharedInputs=True
+    ).combine(
+        reducer2=ee.Reducer.max(),
+        sharedInputs=True
+    ),
+    geometry=aoi,
+    scale=30,
+    maxPixels=1e13
+).getInfo()
+
+dem_stats = {
+    'mean': stats.get('elevation_mean'),
+    'min': stats.get('elevation_min'),
+    'max': stats.get('elevation_max'),
+}
+slope_stats = {
+    'mean': stats.get('slope_mean'),
+    'min': stats.get('slope_min'),
+    'max': stats.get('slope_max'),
+}
+
+def _fmt(v):
+    return 'None' if v is None else f'{v:.2f}'
+
+print(f"{'指标':<10} | {'高程(m)':<12} | {'坡度(度)':<12}")
+print('-' * 40)
+print(f"{'均值':<10} | {_fmt(dem_stats['mean']):<12} | {_fmt(slope_stats['mean']):<12}")
+print(f"{'最小值':<10} | {_fmt(dem_stats['min']):<12} | {_fmt(slope_stats['min']):<12}")
+print(f"{'最大值':<10} | {_fmt(dem_stats['max']):<12} | {_fmt(slope_stats['max']):<12}")
+
+print('dem_stats', dem_stats)
+print('slope_stats', slope_stats)
+```
+
+Anti-patterns to avoid:
+- Using an arbitrary scale that does not match the DEM.
+- Forgetting to summarize both DEM and derived slope.
+- Printing server-side `ComputedObject` placeholders as final statistics.
+- Using `bestEffort=True` to hide AOI/scale issues.
+- Converting missing stats to 0 or formatting `None` with `:.2f` (causes runtime errors).
+
+Expected behavior for this pattern:
+- Elevation and slope summary statistics are returned as numeric outputs.
+
+Promotion checklist:
+- [x] GEE Code Editor (JavaScript) native run passed
+- [x] agent execution passed
+- [x] frontend integration passed
+- [x] band / scale / reducer / unit verified
+- [x] output remains stable across reruns
+
+===
