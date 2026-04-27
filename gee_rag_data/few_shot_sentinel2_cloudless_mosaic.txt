@@ -1,0 +1,199 @@
+## FEW_SHOT: Cloudless Daily Mosaic over AOI (Sentinel-2 / Landsat 8 / Landsat 9)
+
+Intent: execution
+Task type: imagery selection and visualization
+Keywords: Sentinel-2, S2, Landsat 8, Landsat 9, L8, L9, cloudless, 最少云, mosaic, AOI 覆盖, 日期, YYYY-MM-DD, projection, StaticPerfError
+
+User task pattern:
+"生成某 AOI 某时间段内云量最少的一张完整覆盖影像"
+支持数据源：COPERNICUS/S2_SR_HARMONIZED（10/20m）、LANDSAT/LC08/C02/T1_L2、LANDSAT/LC09/C02/T1_L2（30m）
+
+Dataset profile mapping (必须按此映射选择字段与波段):
+- COPERNICUS/S2_SR_HARMONIZED:
+    cloud_property = "CLOUDY_PIXEL_PERCENTAGE"
+    rgb_bands      = ["B4", "B3", "B2"]
+    vis_range      = {"min": 0, "max": 3000}
+    scale_factor   = None          # SR 已是反射率 * 10000，直接用 min/max 可视化
+    native_scale   = 10
+- LANDSAT/LC08/C02/T1_L2 和 LANDSAT/LC09/C02/T1_L2:
+    cloud_property = "CLOUD_COVER"
+    rgb_bands      = ["SR_B4", "SR_B3", "SR_B2"]
+    vis_range      = {"min": 0.0, "max": 0.3}
+    scale_factor   = (0.0000275, -0.2)
+    native_scale   = 30
+
+Critical rules (must follow):
+1) 候选集规模：`.sort(cloud_property).limit(30)`（不要超过 30，再大会 StaticPerfError）。
+2) 云量不设阈值 —— 只用 `.sort(cloud_property)` 升序，禁止写 `.filter(ee.Filter.lt(cloud_property, X))`。
+3) 覆盖率必须用 Geometry 层面计算（几何运算，毫秒级）。
+   **严禁使用像素级计算** —— 即 `image.mask().multiply(ee.Image.pixelArea()).reduceRegion(...)` 会触发 StaticPerfError。
+   正确方式：`day_footprint_3857.intersection(aoi_3857, 1).area(1) / aoi_3857.area(1) * 100`。
+4) 投影规范：所有几何运算统一到 `EPSG:3857` 再 `.area(1)`。不要对 ee.Image 调用 `.reproject()`（沙箱规则 20）。
+5) 覆盖率阈值：100%（用 99.9 容忍浮点）。若无日期达标，fallback 到候选集覆盖率最高那天。
+6) AOI：优先使用后端已解析并缓存的通用 OpenStreetMap 边界 helper：`load_aoi_boundary()`。
+   该 helper 返回 ee.FeatureCollection；边界由后端通过 Nominatim polygon_geojson=1 获取并缓存，本代码不要请求 OSM 网络 API。
+7) 若上下文提供了 AOI 边界，必须写：
+   `aoi_fc = load_aoi_boundary()`，`aoi = aoi_fc.geometry()`。
+   对 filterBounds 使用 `aoi`；最终显示裁剪使用 `.clipToCollection(aoi_fc)`。
+8) 性能边界：保存的 OSM 边界可以很细。覆盖率/面积计算使用 `aoi.simplify(100)` 后再 transform 到 EPSG:3857；
+   最终 clip 尽量使用未简化的 `aoi_fc` 保留海岸线细节。
+9) 必须 print（汇总阶段要用）:
+   - "Dataset: <collection_id>"
+   - "Selected date: YYYY-MM-DD"
+   - "Image IDs: [...]"
+   - "Mean cloud %: X.XX"
+   - "AOI coverage %: X.XX"
+   - "Boundary source: ..."
+   - "Boundary names: [...]"
+9) Sentinel-2 用 `COPERNICUS/S2_SR_HARMONIZED`（沙箱规则 13）。Landsat SR 要乘 scale_factor（沙箱规则 24）。
+
+Positive ReAct trajectory:
+- Observe:
+  - 从 query 中识别数据源 → 查 Dataset profile 拿 cloud_property / rgb_bands / vis_range / scale_factor。
+  - 识别 AOI：若上下文提示已准备 AOI 边界缓存，直接 `aoi_fc = load_aoi_boundary()`；不要写死香港，不要在代码中联网查 OSM。
+  - 识别时间：年份 "2022" → "2022-01-01" ~ "2023-01-01"。
+- Think:
+  - 候选集：`filterBounds + filterDate + sort(cloud_property) + limit(30)`。
+  - 每个候选日期用 **纯几何** intersection 算覆盖率（严禁像素级 reduceRegion）。
+  - coverage >= 99.9 → sort(cloud 升序) → 取第一；否则 fallback 到覆盖率最高那天。
+- Act:
+  - 用最佳日期对应的当天 scenes（从原集合重取，不受 limit 影响）→ mosaic。
+  - Landsat 乘 scale_factor，S2 原样。
+  - `.clipToCollection(aoi_fc)` 后 Map.addLayer，print 所有元信息。
+
+Reference Python snippet (memory-safe, S2/L8/L9 共用):
+```python
+import ee
+
+# ---- 可调参数 ----
+collection_id = "COPERNICUS/S2_SR_HARMONIZED"   # 或 "LANDSAT/LC08/C02/T1_L2" / "LANDSAT/LC09/C02/T1_L2"
+start         = "2022-01-01"
+end           = "2023-01-01"
+CANDIDATE_LIMIT = 30
+COVERAGE_TARGET = 99.9
+METRIC_CRS      = "EPSG:3857"
+# -------------------
+
+def get_dataset_profile(cid):
+    if cid == "COPERNICUS/S2_SR_HARMONIZED":
+        return {"cloud_property": "CLOUDY_PIXEL_PERCENTAGE",
+                "rgb_bands": ["B4", "B3", "B2"],
+                "vis_range": {"min": 0, "max": 3000},
+                "scale_factor": None}
+    if cid in ("LANDSAT/LC08/C02/T1_L2", "LANDSAT/LC09/C02/T1_L2"):
+        return {"cloud_property": "CLOUD_COVER",
+                "rgb_bands": ["SR_B4", "SR_B3", "SR_B2"],
+                "vis_range": {"min": 0.0, "max": 0.3},
+                "scale_factor": (0.0000275, -0.2)}
+    raise ValueError("Unsupported collection: " + cid)
+
+profile    = get_dataset_profile(collection_id)
+cloud_prop = profile["cloud_property"]
+rgb_bands  = profile["rgb_bands"]
+vis_range  = profile["vis_range"]
+sf         = profile["scale_factor"]
+
+# 通用 AOI：后端已按用户地名解析并缓存 OSM 边界，代码只读取缓存，不联网。
+aoi_fc = load_aoi_boundary()
+boundary_source = "Cached OpenStreetMap boundary via load_aoi_boundary()"
+
+aoi = aoi_fc.geometry()
+# 覆盖率/面积计算用简化几何，避免超细 OSM 边界拖慢 GEE；最终 clip 仍用 aoi_fc。
+aoi_metric = aoi.simplify(100).transform(METRIC_CRS, 1)
+aoi_area   = aoi_metric.area(1)
+
+# 1. 候选集：sort + limit（内存安全）
+candidates = (ee.ImageCollection(collection_id)
+              .filterBounds(aoi)
+              .filterDate(start, end)
+              .sort(cloud_prop)
+              .limit(CANDIDATE_LIMIT)
+              .map(lambda img: img.set("date_str", img.date().format("YYYY-MM-dd"))))
+
+# 2. 候选集中所有 distinct 日期
+candidate_dates = candidates.aggregate_array("date_str").distinct()
+
+# 3. 每个候选日期：用 Geometry intersection 算覆盖率（严禁像素级）
+def per_day(d):
+    day_col = candidates.filter(ee.Filter.eq("date_str", d))
+    mean_cloud   = day_col.aggregate_mean(cloud_prop)
+    # 纯几何运算 —— 这是整个模板的性能关键：
+    covered_geom = day_col.geometry().transform(METRIC_CRS, 1)
+    coverage_pct = covered_geom.intersection(aoi_metric, 1).area(1) \
+                               .divide(aoi_area).multiply(100)
+    ids = day_col.aggregate_array("system:index")
+    return ee.Feature(None, {
+        "date":         d,
+        "mean_cloud":   mean_cloud,
+        "coverage_pct": coverage_pct,
+        "image_ids":    ids,
+    })
+
+day_stats = ee.FeatureCollection(candidate_dates.map(per_day))
+
+# 4. 达标日期按云量升序；无达标则 fallback 到覆盖率最高那天
+full_cover = day_stats.filter(ee.Filter.gte("coverage_pct", COVERAGE_TARGET)).sort("mean_cloud")
+fallback   = day_stats.sort("coverage_pct", False)
+
+# 防御性：确保 day_stats 非空才访问，两分支都显式给出非 null Feature
+best = ee.Feature(ee.Algorithms.If(
+    day_stats.size().gt(0),
+    ee.Algorithms.If(full_cover.size().gt(0), full_cover.first(), fallback.first()),
+    ee.Feature(None, {"date": "", "mean_cloud": -1, "coverage_pct": 0, "image_ids": []})
+))
+
+best_date     = ee.String(best.get("date"))
+best_cloud    = ee.Number(best.get("mean_cloud"))
+best_coverage = ee.Number(best.get("coverage_pct"))
+best_ids      = best.get("image_ids")
+
+# 5. 用最佳日期的所有 scenes（从原集合重取）生成 mosaic
+best_day_col = (ee.ImageCollection(collection_id)
+                .filterBounds(aoi)
+                .filterDate(start, end)
+                .map(lambda img: img.set("date_str", img.date().format("YYYY-MM-dd")))
+                .filter(ee.Filter.eq("date_str", best_date)))
+
+mosaic = best_day_col.mosaic()
+
+# 6. Landsat 还原反射率；S2 原样
+if sf is not None:
+    mosaic = mosaic.multiply(sf[0]).add(sf[1])
+
+mosaic = mosaic.clipToCollection(aoi_fc)
+
+# 7. 输出与显示
+print("Dataset:", collection_id)
+print("Selected date:", best_date.getInfo())
+print("Mean cloud %:", best_cloud.getInfo())
+print("AOI coverage %:", best_coverage.getInfo())
+print("Image IDs:", best_ids.getInfo())
+if isinstance(boundary_source, str):
+    print("Boundary source:", boundary_source)
+else:
+    print("Boundary source:", boundary_source.getInfo())
+print("Boundary names:", aoi_fc.aggregate_array("display_name").distinct().getInfo())
+
+Map.addLayer(mosaic,
+             {"bands": rgb_bands, **vis_range},
+             collection_id.split("/")[-1] + " " + best_date.getInfo())
+```
+
+Anti-patterns to avoid:
+- 使用 `image.mask().multiply(ee.Image.pixelArea()).reduceRegion(...)` 计算覆盖率 —— 这是像素级遍历，80 个日期 × 全 HK 像素 = **StaticPerfError**。必须用 `geometry.intersection.area`。
+- `CANDIDATE_LIMIT` 超过 30 —— 几何运算数量也要控制。
+- `filter(ee.Filter.lt(cloud_property, X))` 硬阈值 —— 本模板只按排序取最低。
+- `sort(cloud_property).first()` 取单景 —— 不保证覆盖整个 AOI。
+- 对 ee.Image 调用 `.reproject()` 或 `.setDefaultProjection()` —— 违反沙箱规则 20。
+- 在 WGS84 下对不同 CRS 的 Geometry 直接做 intersection.area —— 投影误差放大。
+- Landsat 不乘 scale_factor 直接 addLayer —— 画面漆黑；波段混用（S2 用 SR_B*、L8 用 B*）—— 字段报错。
+- 使用已弃用的 "COPERNICUS/S2_SR"。
+- 生成代码中直接请求 OSM/Nominatim/Overpass 网络 API —— 禁止。OSM 边界只能通过后端 helper `load_aoi_boundary()` 读取本地缓存。
+- AOI 任务用 BBox 作为最终 clip（违反沙箱规则 22，BBox 只能作为最后 fallback，且必须 print）。
+- fallback 分支返回 null Feature —— 会导致 `Element.get: Parameter 'object' is required and may not be null`。
+
+Expected behavior:
+- 地图显示一整幅无缝、覆盖全 AOI 的真彩色影像（S2 自然 / Landsat 还原反射率后自然）。
+- 聊天回复包含：数据源、日期（YYYY-MM-DD）、影像 IDs、平均云量%、AOI 覆盖率%。
+- 不触发 StaticPerfError（候选集 30 + 纯几何运算）。
+- 下一轮用户问"刚才那张是哪天的"时，可直接从 session 读取。

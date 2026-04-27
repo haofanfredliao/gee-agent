@@ -72,8 +72,13 @@ def run_ndvi_example(
             .filterBounds(roi)
             .select("NDVI")
         )
-        ndvi = col.mean().clip(roi)
-        vis = {"min": 0, "max": 9000, "palette": ["white", "green"]}
+        # MOD13Q1 NDVI is scaled by 0.0001; convert to physical range [-1, 1].
+        ndvi = col.mean().multiply(0.0001).rename("NDVI").clamp(-1, 1).clip(roi)
+        vis = {
+            "min": -0.2,
+            "max": 0.8,
+            "palette": ["#8c510a", "#d8b365", "#f6e8c3", "#c7eae5", "#5ab4ac", "#01665e"],
+        }
         map_id = ndvi.getMapId(vis)
         tile_url = map_id.get("tile_fetcher").url_format if map_id else None
         stat = ndvi.reduceRegion(

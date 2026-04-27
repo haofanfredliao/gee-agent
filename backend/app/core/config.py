@@ -56,7 +56,7 @@ DEFAULT_CENTER_LON: float = float(get_setting("map", {}).get("center_lon", 114.1
 DEFAULT_ZOOM: int = int(get_setting("map", {}).get("zoom", 10))
 DEFAULT_MODEL: str = get_setting("llm", {}).get("default_model", "gpt-4")
 
-CHROMA_PERSIST_DIR: str = get_setting("chroma", {}).get("persist_dir", "./data/chroma")
+CHROMA_PERSIST_DIR: str = os.environ.get("CHROMA_PERSIST_DIR") or get_setting("chroma", {}).get("persist_dir", "./data/chroma")
 
 # GEE：project 必填，否则 GEE 无法正常启动
 def _gee_settings() -> dict:
