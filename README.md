@@ -6,7 +6,7 @@
 
 ## DEMO
 
-![ezgif-23db9c733c201727](/Users/fred/Code/gee-agent/docs/ezgif-23db9c733c201727.gif)
+![ezgif-23db9c733c201727](./docs/ezgif-23db9c733c201727.gif)
 
 ## 架构图
 
