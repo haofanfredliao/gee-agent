@@ -2,11 +2,13 @@
 
 基于 **ReAct 架构**的 Google Earth Engine 智能助手，使用 FastAPI + Streamlit + Chroma 构建。
 
-
-
 ---
 
-## 核心架构：ReAct Orchestrator
+## DEMO
+
+![ezgif-23db9c733c201727](/Users/fred/Code/gee-agent/docs/ezgif-23db9c733c201727.gif)
+
+## 架构图
 
 系统以一个 **Observe-Think-Act 循环**（ReAct）为核心，统一处理所有用户请求。每次对话先由 Router 分类意图，再走对应的执行分支，所有中间状态均通过 Session Store 跨请求持久化。
 
