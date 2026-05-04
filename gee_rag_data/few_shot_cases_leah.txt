@@ -1,0 +1,858 @@
+## FEW_SHOT: Landsat 8 C2 L2 Land Surface Temperature (Celsius)
+
+Intent: execution
+Task type: temperature inversion
+Keywords: LANDSAT/LC08/C02/T1_L2, ST_B10, LST, Celsius, Kelvin, scale factor, offset, reduceRegion
+
+User task pattern:
+"Use LANDSAT/LC08/C02/T1_L2 to retrieve an image and compute land surface temperature (LST) in Celsius."
+
+Assets in this case:
+- Image collection: LANDSAT/LC08/C02/T1_L2
+- Project ID: ee-hku-geog7310
+
+Critical rules (must follow):
+1) Always apply Landsat 8 C2 L2 thermal scale conversion before using ST_B10.
+   - Kelvin = ST_B10 * 0.00341802 + 149.0
+   - Celsius = Kelvin - 273.15
+2) Do not treat raw ST_B10 DN as physical temperature.
+   - ST_B10 in this dataset is scaled integer, not direct Kelvin/Celsius.
+3) Use an L2 surface-temperature scene.
+   - Prefer filtering by PROCESSING_LEVEL = "L2SP" before selecting the image.
+4) Keep computation server-side and only materialize final small outputs.
+   - Build image math first, then call getInfo() on final scalar results.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect collection id and thermal band name ST_B10
+  - inspect whether selected image is L2SP and note nominal scale
+- Think:
+  - define explicit conversion path DN -> Kelvin -> Celsius
+  - ensure outputs are from converted band instead of raw ST_B10
+- Act:
+  - filter collection by AOI/date and select one image
+  - convert ST_B10 with scale factor and offset
+  - reduce region for mean LST and print Celsius result
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+ee.Initialize(project="ee-hku-geog7310")
+
+aoi = ee.Geometry.Point([114.1694, 22.3193]).buffer(2000)
+
+image = (
+    ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+    .filterBounds(aoi)
+    .filterDate("2021-01-01", "2021-12-31")
+    .filter(ee.Filter.eq("PROCESSING_LEVEL", "L2SP"))
+    .sort("CLOUD_COVER")
+    .first()
+)
+
+st_scale = ee.Number(0.00341802)
+st_offset = ee.Number(149.0)
+
+# DN -> Kelvin -> Celsius
+lst_c = (
+    image.select("ST_B10")
+    .multiply(st_scale)
+    .add(st_offset)
+    .subtract(273.15)
+    .rename("LST_C")
+)
+
+mean_c = lst_c.reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=aoi,
+    scale=30,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("LST_C")
+
+print("Mean LST (C):", ee.Number(mean_c).getInfo())
+```
+
+Anti-patterns to avoid:
+- Using ST_B10 directly as Celsius without scale/offset conversion.
+- Applying only one step (e.g., multiply scale factor but forgetting offset).
+- Converting to Kelvin but forgetting Kelvin-to-Celsius subtraction (273.15).
+- Running reduceRegion on raw ST_B10 and reporting it as temperature.
+
+Expected behavior for this pattern:
+- The final reported LST is in Celsius and within a physically plausible range for the selected AOI/date.
+===
+
+## FEW_SHOT: CHIRPS Daily to Annual Precipitation Time-Series (Case 2)
+
+Intent: execution
+Task type: climate time-series aggregation
+Keywords: UCSB-CHG/CHIRPS/DAILY, precipitation, time-series, annual sum, reduceRegion, mean precipitation, AOI
+
+User task pattern:
+"Use CHIRPS daily precipitation data to compute annual total precipitation for 2022 and report the mean annual precipitation over an AOI."
+
+Assets in this case:
+- Image collection: UCSB-CHG/CHIRPS/DAILY
+- Project ID: ee-hku-geog7310
+
+Critical rules (must follow):
+1) Use correct time filtering for the target year.
+   - For year 2022, use start="2022-01-01" and end="2023-01-01" (end-exclusive).
+2) Aggregate daily precipitation with .sum() to build annual total precipitation.
+   - Do not use .mean() when the task asks for annual total.
+3) Use reduceRegion on the annual precipitation image to get AOI summary value.
+   - The output should be a scalar precipitation value in millimeters.
+4) Respect Earth Engine lazy execution.
+   - Keep operations server-side and only call getInfo() for final outputs.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect collection id and confirm daily precipitation band availability
+  - inspect image count after date/AOI filtering
+- Think:
+  - map task requirement to daily->annual aggregation via .sum()
+  - separate two objectives: annual total image and AOI mean scalar
+- Act:
+  - filter CHIRPS collection by AOI and year 2022
+  - compute annual precipitation image via .sum()
+  - compute AOI mean annual precipitation using reduceRegion and print final value
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+ee.Initialize(project="ee-hku-geog7310")
+
+aoi = ee.Geometry.Point([114.1694, 22.3193]).buffer(2000)
+
+
+chirps_2022 = (
+    ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY")
+    .filterBounds(aoi)
+    .filterDate("2022-01-01", "2023-01-01")
+)
+
+annual_precip = chirps_2022.sum().rename("annual_precip_mm")
+
+mean_annual_precip = annual_precip.reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=aoi,
+    scale=5566,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("annual_precip_mm")
+
+print("Mean annual precipitation (mm):", ee.Number(mean_annual_precip).getInfo())
+```
+
+Anti-patterns to avoid:
+- Using .mean() over the daily collection when the target output is annual total precipitation.
+- Filtering year range incorrectly (e.g., using end date "2022-12-31" and missing boundary handling).
+- Calling reduceRegion on a single daily image instead of the annual summed image.
+- Materializing intermediate large objects with unnecessary getInfo() calls.
+
+Expected behavior for this pattern:
+- The printed precipitation value is an AOI-level annual mean (mm) derived from summed 2022 daily CHIRPS data.
+===
+
+## FEW_SHOT: ERA5-Land 2m Air Temperature Time-Series Mean (Case 3)
+
+Intent: execution
+Task type: climate time-series averaging
+Keywords: ECMWF/ERA5_LAND/MONTHLY_BY_HOUR, temperature_2m, Kelvin, Celsius, mean, reduceRegion, AOI, time-series
+
+User task pattern:
+"Use ERA5-Land monthly data to compute the average 2m air temperature over Hong Kong in 2023, and report the final value in Celsius."
+
+Assets in this case:
+- Image collection: ECMWF/ERA5_LAND/MONTHLY_BY_HOUR
+- Project ID: ee-hku-geog7310
+
+Critical rules (must follow):
+1) Select the correct variable band before aggregation.
+   - Use .select("temperature_2m") to avoid mixing unrelated meteorological bands.
+2) Convert units from Kelvin to Celsius before computing final metric.
+   - Celsius = Kelvin - 273.15
+3) Distinguish Sum vs Mean based on task semantics.
+   - Temperature over time should use .mean(), not .sum().
+   - Sum is for accumulative variables (e.g., precipitation), not for instantaneous/state variables like temperature.
+4) Compute AOI scalar with reduceRegion on the period-aggregated image.
+   - First build mean temperature image for the target period, then reduce to a scalar.
+5) Respect Earth Engine lazy execution.
+   - Keep transformations server-side; call getInfo() only on final numeric outputs.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect dataset id, target band (temperature_2m), and time window
+  - inspect image count after filtering and nominal scale
+- Think:
+  - determine conversion pipeline Kelvin -> Celsius before time aggregation
+  - map requirement "average temperature" to .mean() rather than .sum()
+- Act:
+  - filter 2023 images and select temperature_2m
+  - convert each image to Celsius and aggregate with .mean()
+  - run reduceRegion over AOI and print final Celsius value
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+ee.Initialize(project="ee-hku-geog7310")
+
+aoi = ee.Geometry.Point([114.1694, 22.3193]).buffer(5000)
+
+era5_2023 = (
+    ee.ImageCollection("ECMWF/ERA5_LAND/MONTHLY_BY_HOUR")
+    .filterBounds(aoi)
+    .filterDate("2023-01-01", "2024-01-01")
+    .select("temperature_2m")
+)
+
+era5_2023_c = era5_2023.map(lambda img: img.subtract(273.15).rename("temperature_2m_c"))
+mean_temp_image = era5_2023_c.mean().rename("mean_temperature_2m_c")
+
+mean_temp_c = mean_temp_image.reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=aoi,
+    scale=11132,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("mean_temperature_2m_c")
+
+print("Mean air temperature 2m (C):", ee.Number(mean_temp_c).getInfo())
+```
+
+Anti-patterns to avoid:
+- Aggregating temperature with .sum() across months and treating it as physical average temperature.
+- Forgetting Kelvin-to-Celsius conversion and directly reporting Kelvin values as Celsius.
+- Reducing over the full unfiltered collection instead of the specified year range.
+- Calling getInfo() repeatedly on intermediate collections/images.
+
+Expected behavior for this pattern:
+- The output is a single AOI-level 2023 mean 2m air temperature value in Celsius, within a climatologically plausible range.
+===
+
+## FEW_SHOT: Land Cover Zonal Statistics with Pixel Proportion (Case 4)
+
+Intent: execution
+Task type: categorical zonal statistics
+Keywords: ESA/WorldCover/v100, frequencyHistogram, zonal statistics, land cover classification, pixel proportion
+
+User task pattern:
+"Use ESA WorldCover data to count land-cover classes within an AOI and compute each class percentage."
+
+Assets in this case:
+- Image collection: ESA/WorldCover/v100
+- Project ID: ee-hku-geog7310
+
+Critical rules (must follow):
+1) Treat land-cover class codes as categorical (discrete) data.
+   - Never use .mean() to summarize class labels.
+   - Must use ee.Reducer.frequencyHistogram() for class-count statistics.
+2) Use dataset-native scale for zonal statistics.
+   - ESA WorldCover v100 native resolution is 10 m, so set scale=10.
+3) Compute percentage from class counts explicitly.
+   - total_pixels = sum(all class counts)
+   - class_percentage = class_count / total_pixels * 100
+4) Keep server-side processing and only materialize final compact outputs.
+   - Run reduceRegion first, then convert histogram dictionary for reporting.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect dataset id and classification band (Map)
+  - confirm AOI geometry and required native scale
+- Think:
+  - map task to histogram-based counts for categorical raster
+  - design post-processing: class_count -> percentage
+- Act:
+  - load WorldCover image and reduce with frequencyHistogram
+  - extract class-count dictionary
+  - compute total and class percentages, then print results
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+ee.Initialize(project="ee-hku-geog7310")
+
+image = ee.ImageCollection("ESA/WorldCover/v100").first()
+aoi = ee.Geometry.Point([114.1397, 22.2830]).buffer(2000)
+
+hist = image.select("Map").reduceRegion(
+    reducer=ee.Reducer.frequencyHistogram(),
+    geometry=aoi,
+    scale=10,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("Map")
+
+hist_dict = ee.Dictionary(hist).getInfo()
+total = sum(hist_dict.values())
+percent_dict = {k: (v / total) * 100 for k, v in hist_dict.items()}
+
+print("Class histogram:", hist_dict)
+print("Class percentage (%):", percent_dict)
+```
+
+Anti-patterns to avoid:
+- Using reducer.mean() on class-code band and treating the result as land-cover composition.
+- Running histogram at coarse scale (e.g., 30 m or 1000 m) when 10 m detail is required.
+- Reporting class counts without normalizing to percentages when task asks for "占比分析".
+
+Expected behavior for this pattern:
+- The output includes class-count dictionary and percentage dictionary, enabling categorical composition analysis for the AOI.
+===
+
+## FEW_SHOT: Sentinel-1 SAR Preprocessing and Speckle Filtering (Case 5)
+
+Intent: execution
+Task type: SAR denoising preprocessing
+Keywords: COPERNICUS/S1_GRD, Speckle Filter, dB to Linear, VV/VH, ASCENDING, DESCENDING
+
+User task pattern:
+"Use Sentinel-1 GRD to preprocess SAR backscatter and apply speckle filtering correctly, then compare values before and after filtering."
+
+Assets in this case:
+- Image collection: COPERNICUS/S1_GRD
+- Project ID: ee-hku-geog7310
+
+Critical rules (must follow):
+1) Keep orbit direction consistent for analysis.
+   - Explicitly filter either ASCENDING or DESCENDING.
+   - Do not mix ascending/descending passes in one composite unless task explicitly requires it.
+2) Keep acquisition mode and polarization explicit.
+   - Use instrumentMode = "IW" and target polarization band (e.g., VV or VH) from inspected metadata.
+3) Speckle filtering must be performed in linear scale.
+   - Correct sequence: dB -> Linear -> spatial filter -> dB.
+   - Applying convolution kernel directly on dB image is mathematically incorrect and must be avoided.
+4) Report before/after metrics to confirm processing effect.
+   - Compute comparable AOI statistics (e.g., mean backscatter in dB) before and after filtering.
+5) Respect Earth Engine lazy execution.
+   - Build server-side pipeline and only call getInfo() on compact final values.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect available Sentinel-1 scenes, orbit direction, polarization, and mode
+  - verify target band exists (VV or VH)
+- Think:
+  - separate physical conversion and filtering steps to avoid domain mismatch
+  - design closed-loop validation with before/after AOI statistics
+- Act:
+  - filter collection by AOI/date/mode/polarization/orbit
+  - convert dB image to linear, run boxcar filter, then convert back to dB
+  - print mean backscatter before and after filtering
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+ee.Initialize(project="ee-hku-geog7310")
+
+aoi = ee.Geometry.Point([114.1694, 22.3193]).buffer(3000)
+
+s1 = (
+    ee.ImageCollection("COPERNICUS/S1_GRD")
+    .filterBounds(aoi)
+    .filterDate("2023-01-01", "2023-12-31")
+    .filter(ee.Filter.eq("instrumentMode", "IW"))
+    .filter(ee.Filter.eq("orbitProperties_pass", "ASCENDING"))
+    .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
+    .select("VV")
+)
+
+vv_db = ee.Image(s1.sort("system:time_start").first())
+vv_linear = ee.Image(10).pow(vv_db.divide(10.0))
+vv_linear_filtered = vv_linear.convolve(ee.Kernel.square(radius=1, units="pixels", normalize=True))
+vv_db_filtered = vv_linear_filtered.log10().multiply(10.0).rename("VV_filtered_db")
+
+before = vv_db.reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=aoi,
+    scale=10,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("VV")
+after = vv_db_filtered.reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=aoi,
+    scale=10,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("VV_filtered_db")
+
+print("Original VV mean (dB):", ee.Number(before).getInfo())
+print("Filtered VV mean (dB):", ee.Number(after).getInfo())
+```
+
+Anti-patterns to avoid:
+- Mixing ASCENDING and DESCENDING orbits in one stack without clear intent.
+- Applying boxcar/Lee/Frost kernels directly to dB-domain image values.
+- Ignoring polarization mismatch (e.g., selecting VH logic but reading VV band).
+- Comparing pre/post values computed at inconsistent AOI or scale settings.
+
+Expected behavior for this pattern:
+- The workflow yields stable pre/post dB statistics and demonstrates the correct linear-domain speckle filtering pipeline.
+===
+
+## FEW_SHOT: Nighttime Light Dynamics for Socio-economic Activity (Case 6)
+
+Intent: execution
+Task type: socio-economic proxy modeling
+Keywords: VIIRS, NTL, log1p, Economic Proxy, Socio-economic, NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG
+
+User task pattern:
+"Use VIIRS nighttime light monthly composites to analyze 2023 urban activity in Hong Kong and report mean radiance after logarithmic transformation."
+
+Assets in this case:
+- Image collection: NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG
+- Project ID: ee-hku-geog7310
+
+Critical rules (must follow):
+1) Use the radiance band explicitly.
+   - Select avg_rad before temporal aggregation.
+2) Apply logarithmic transform before regional summary.
+   - Nighttime light radiance is typically right-skewed; log1p-style transform helps stabilize distribution and reduce dominance of bright outliers.
+   - In Earth Engine Python API, use ln(1 + x) via image.add(1).log() as log1p equivalent.
+3) Use native-like analysis scale for VIIRS.
+   - Set scale=500 for reduceRegion to match VIIRS monthly product resolution convention in this workflow.
+4) Keep temporal semantics explicit.
+   - Filter target period first (e.g., 2023), then aggregate monthly images with .mean().
+5) Respect Earth Engine lazy execution.
+   - Keep image operations server-side and call getInfo() only on final scalar outputs.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect dataset id, target band avg_rad, and available monthly images for 2023
+  - verify AOI and intended output metric (mean radiance)
+- Think:
+  - map requirement "log1p + mean radiance" to sequence: temporal mean -> log transform -> reduceRegion mean
+  - ensure transform is applied before final AOI summary
+- Act:
+  - filter VIIRS collection by AOI and 2023 date range
+  - compute annual mean radiance image from monthly composites
+  - apply log1p-equivalent transform and print Mean Radiance scalar
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+ee.Initialize(project="ee-hku-geog7310")
+
+aoi = ee.Geometry.Point([114.1694, 22.3193]).buffer(5000)
+
+viirs_2023 = (
+    ee.ImageCollection("NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG")
+    .filterBounds(aoi)
+    .filterDate("2023-01-01", "2024-01-01")
+    .select("avg_rad")
+)
+
+avg_rad_2023 = viirs_2023.mean().rename("avg_rad_mean")
+log_rad_2023 = avg_rad_2023.add(1).log().rename("log1p_avg_rad")
+
+mean_radiance = log_rad_2023.reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=aoi,
+    scale=500,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("log1p_avg_rad")
+
+print("Mean Radiance (log1p avg_rad):", ee.Number(mean_radiance).getInfo())
+```
+
+Anti-patterns to avoid:
+- Running reduceRegion directly on raw avg_rad without logarithmic transformation for skewed-light analyses.
+- Using inconsistent scale far from VIIRS convention, causing unstable or non-comparable summaries.
+- Applying getInfo() repeatedly to intermediate images/collections.
+- Mixing months outside the target period when the task is year-specific.
+
+Expected behavior for this pattern:
+- The output is a stable AOI-level 2023 mean nighttime-light radiance metric after log1p-style transformation, suitable as an economic activity proxy.
+===
+
+## FEW_SHOT: Vegetation Productivity Estimation with MODIS GPP (Case 7)
+
+Intent: execution
+Task type: ecosystem productivity estimation
+Keywords: MODIS/061/MOD17A2HGF, GPP, vegetation productivity, scale factor, annual aggregation, carbon flux
+
+User task pattern:
+"Estimate annual vegetation productivity over Hong Kong using MODIS GPP and report AOI-level mean annual GPP."
+
+Assets in this case:
+- Image collection: MODIS/061/MOD17A2HGF
+- Project ID: ee-hku-geog7310
+
+Critical rules (must follow):
+1) Select the correct productivity band.
+   - Use .select("Gpp") from MOD17A2HGF.
+2) Apply the official scale factor before any physical interpretation.
+   - Gpp physical value = raw Gpp * 0.0001
+3) Respect temporal semantics of GPP composites.
+   - MOD17A2HGF is 8-day composite; annual GPP should be aggregated with .sum(), not .mean().
+4) Keep units explicit after conversion and aggregation.
+   - After scale-factor conversion and annual sum, report as annual productivity (kg C m^-2 yr^-1 context).
+5) Use stable zonal summary settings.
+   - Use reduceRegion over AOI at scale=500 to align with MODIS nominal resolution convention.
+6) Respect Earth Engine lazy execution.
+   - Build collection transformations server-side and call getInfo() only on final scalar outputs.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect dataset id, target band Gpp, and number of 2023 composite images
+  - inspect intended aggregation period (annual) and AOI
+- Think:
+  - map task to pipeline: scale conversion -> temporal sum -> spatial mean
+  - ensure aggregation choice follows variable semantics (flux accumulation vs state average)
+- Act:
+  - filter MOD17A2HGF by AOI and 2023 date range
+  - convert Gpp using scale factor and sum all composites
+  - reduce annual image over AOI and print mean annual GPP
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+ee.Initialize(project="ee-hku-geog7310")
+
+aoi = ee.Geometry.Point([114.1694, 22.3193]).buffer(5000)
+
+gpp_2023 = (
+    ee.ImageCollection("MODIS/061/MOD17A2HGF")
+    .filterBounds(aoi)
+    .filterDate("2023-01-01", "2024-01-01")
+    .select("Gpp")
+)
+
+gpp_kg = gpp_2023.map(lambda img: img.multiply(0.0001).rename("Gpp_kgC_m2_8day"))
+annual_gpp = gpp_kg.sum().rename("annual_gpp_kgC_m2")
+
+mean_annual_gpp = annual_gpp.reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=aoi,
+    scale=500,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("annual_gpp_kgC_m2")
+
+print("Mean annual GPP (kg C m^-2 yr^-1):", ee.Number(mean_annual_gpp).getInfo())
+```
+
+Anti-patterns to avoid:
+- Using raw Gpp integers directly without applying scale factor 0.0001.
+- Computing annual GPP with .mean() and treating it as cumulative annual productivity.
+- Mixing data outside the target year when task requires strict annual estimate.
+- Omitting unit context in final reported number.
+
+Expected behavior for this pattern:
+- The output is an AOI-level annual vegetation productivity estimate with physically interpretable magnitude after proper scale conversion and temporal accumulation.
+===
+
+## FEW_SHOT: Flood Disaster Change Detection with Sentinel-1 (Case 8)
+
+Intent: execution
+Task type: flood change detection
+Keywords: COPERNICUS/S1_GRD, change detection, flood mapping, pre/post event, dB to Linear, VV, ASCENDING
+
+User task pattern:
+"Detect potential flood-affected area by comparing pre-event and post-event Sentinel-1 SAR backscatter over Hong Kong."
+
+Assets in this case:
+- Image collection: COPERNICUS/S1_GRD
+- Project ID: ee-hku-geog7310
+
+Critical rules (must follow):
+1) Keep acquisition geometry consistent for pre/post comparison.
+   - Use the same orbit direction (ASCENDING or DESCENDING), mode (IW), and polarization (VV or VH).
+   - Do not mix passes between pre and post stacks.
+2) Perform ratio/change logic in linear domain.
+   - Convert dB to linear first, then compute post/pre ratio.
+   - Thresholding directly on dB ratio logic is physically inconsistent.
+3) Use robust temporal compositing for each period.
+   - Build pre-event and post-event composites (e.g., median) to reduce speckle/noise sensitivity.
+4) Convert flood mask to area using pixelArea.
+   - area_km2 = sum(pixelArea on flood mask) / 1e6
+5) Keep thresholds explicit and interpretable.
+   - Example: post/pre < 0.7 and post dB < -15 as a simple flood proxy baseline.
+6) Respect Earth Engine lazy execution.
+   - Keep all transforms server-side and call getInfo() only for final summary statistics.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect available Sentinel-1 scenes for target date windows
+  - confirm orbit/mode/polarization consistency
+- Think:
+  - design pre/post composite strategy and change metric in linear domain
+  - include both relative drop (ratio) and absolute low-backscatter condition
+- Act:
+  - build pre/post median composites
+  - convert to linear, compute ratio, derive flood mask
+  - compute pre/post mean dB and flood area for closed-loop reporting
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+ee.Initialize(project="ee-hku-geog7310")
+
+aoi = ee.Geometry.Point([114.1694, 22.3193]).buffer(15000)
+
+s1 = (
+    ee.ImageCollection("COPERNICUS/S1_GRD")
+    .filterBounds(aoi)
+    .filter(ee.Filter.eq("instrumentMode", "IW"))
+    .filter(ee.Filter.eq("orbitProperties_pass", "ASCENDING"))
+    .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
+    .select("VV")
+)
+
+pre = s1.filterDate("2023-08-01", "2023-09-01").median().rename("pre_vv_db")
+post = s1.filterDate("2023-09-01", "2023-10-01").median().rename("post_vv_db")
+
+pre_linear = ee.Image(10).pow(pre.divide(10.0))
+post_linear = ee.Image(10).pow(post.divide(10.0))
+
+ratio = post_linear.divide(pre_linear)
+flood_mask = ratio.lt(0.7).And(post.lt(-15)).rename("flood_mask")
+
+flood_area_km2 = ee.Image.pixelArea().updateMask(flood_mask).reduceRegion(
+    reducer=ee.Reducer.sum(),
+    geometry=aoi,
+    scale=10,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("area")
+
+print("Estimated flood area (km^2):", ee.Number(flood_area_km2).divide(1e6).getInfo())
+```
+
+Anti-patterns to avoid:
+- Mixing ASCENDING and DESCENDING scenes between pre and post composites.
+- Using mean() on raw noisy single-date SAR scenes without temporal compositing.
+- Computing post/pre ratio directly in dB domain.
+- Reporting flood extent without converting mask to physical area.
+
+Expected behavior for this pattern:
+- The pipeline outputs interpretable pre/post backscatter summaries and an estimated flood-affected area, suitable for rapid disaster change screening.
+===
+
+## FEW_SHOT: Urban Heat Island Analysis with LST and Population Density (Case 9)
+
+Intent: execution
+Task type: urban climate hotspot analysis
+Keywords: UHI, LST, population density, Landsat 8 C2 L2, WorldPop, weighted mean, urban-rural contrast
+
+User task pattern:
+"Estimate urban heat island intensity in Hong Kong by combining Landsat LST with population density and reporting urban-rural temperature contrast."
+
+Assets in this case:
+- LST source: LANDSAT/LC08/C02/T1_L2
+- Population source: WorldPop/GP/100m/pop/HKG_2020
+- Project ID: ee-hku-geog7310
+
+Critical rules (must follow):
+1) Convert Landsat thermal band to physical temperature first.
+   - LST_C = ST_B10 * 0.00341802 + 149.0 - 273.15
+   - Do not compare urban/rural intensity on raw ST_B10 integers.
+2) Keep temporal window explicit for LST climatology.
+   - Use a defined season/year (e.g., 2023 summer) before spatial analysis.
+3) Build population-based masks with clear thresholds.
+   - Use quantile-based or explicit density thresholds to separate urban-like and rural-like zones.
+4) Align spatial summary scale to cross-sensor analysis.
+   - When combining 30 m LST with 100 m population, use a stable summary scale (e.g., 100 m) in reduceRegion.
+5) Report UHI as a contrast metric.
+   - UHI intensity = mean LST(urban mask) - mean LST(rural mask)
+6) Optionally report population-weighted thermal metric.
+   - weighted_LST = sum(LST * POP) / sum(POP) for socio-economic exposure interpretation.
+7) Respect Earth Engine lazy execution.
+   - Keep pipeline server-side and call getInfo() only on final metrics.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect Landsat scene availability and WorldPop coverage in AOI
+  - verify LST and POP bands and intended units
+- Think:
+  - define urban/rural partition strategy from population density
+  - define outputs: urban mean, rural mean, UHI intensity, weighted LST
+- Act:
+  - convert ST_B10 to Celsius and build seasonal mean LST image
+  - derive population masks and compute zonal means
+  - compute urban-rural contrast and print final scalar indicators
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+ee.Initialize(project="ee-hku-geog7310")
+
+aoi = ee.Geometry.Point([114.1694, 22.3193]).buffer(15000)
+
+lst_c = (
+    ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+    .filterBounds(aoi)
+    .filterDate("2023-06-01", "2023-09-01")
+    .filter(ee.Filter.eq("PROCESSING_LEVEL", "L2SP"))
+    .select("ST_B10")
+    .mean()
+    .multiply(0.00341802)
+    .add(149.0)
+    .subtract(273.15)
+    .rename("LST_C")
+)
+
+pop = ee.Image("WorldPop/GP/100m/pop/HKG_2020").select("population").rename("POP")
+stats = pop.reduceRegion(
+    reducer=ee.Reducer.percentile([25, 75]),
+    geometry=aoi,
+    scale=100,
+    bestEffort=True,
+    maxPixels=1_000_000,
+)
+urban_mask = pop.gte(ee.Number(stats.get("POP_p75")))
+rural_mask = pop.lte(ee.Number(stats.get("POP_p25")))
+
+urban_lst = lst_c.updateMask(urban_mask).reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=aoi,
+    scale=100,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("LST_C")
+rural_lst = lst_c.updateMask(rural_mask).reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=aoi,
+    scale=100,
+    bestEffort=True,
+    maxPixels=1_000_000,
+).get("LST_C")
+uhi = ee.Number(urban_lst).subtract(ee.Number(rural_lst))
+
+print("UHI intensity (C, urban-rural):", uhi.getInfo())
+```
+
+Anti-patterns to avoid:
+- Comparing urban/rural intensity with unconverted ST_B10 raw values.
+- Mixing mismatched temporal windows between LST and interpretation period.
+- Using arbitrary masks that return null statistics (no valid pixels in AOI).
+- Reporting only one zone temperature without urban-rural contrast metric.
+
+Expected behavior for this pattern:
+- The output includes valid urban and rural mean LST plus UHI intensity (urban-rural, Celsius), enabling interpretable heat-risk diagnostics with socio-economic context.
+===
+
+## FEW_SHOT: Temporal Breakpoint Detection (Simplified CCDC) for Disturbance Mapping (Case 10)
+
+Intent: execution
+Task type: temporal change-point detection
+Keywords: CCDC, TemporalSegmentation, breakpoint extraction, disturbance timing, amplitude, attribution logic tree, LANDSAT/LC08/C02/T1_L2
+
+User task pattern:
+"Use multi-year Landsat time series to detect precise disturbance timing and magnitude, then map likely event attribution (forest disturbance / urban expansion / disaster)."
+
+Assets in this case:
+- Time-series source: LANDSAT/LC08/C02/T1_L2 (or Sentinel-2 with equivalent preprocessing)
+- Algorithm: ee.Algorithms.TemporalSegmentation.Ccdc
+- Project ID: ee-hku-geog7310
+
+Critical rules (must follow):
+1) Build analysis-ready time series before CCDC.
+   - Apply cloud/shadow/snow masking.
+   - Convert SR bands with scale factor and offset before index derivation.
+   - Keep consistent band schema across all images.
+2) Configure CCDC parameters explicitly and reproducibly.
+   - breakpointBands: include disturbance-sensitive indices (e.g., NDVI/NBR).
+   - tmaskBands: must satisfy API constraints (exactly two bands in this configuration).
+   - minObservations / chiSquareProbability / lambda / maxIterations must be documented for reproducibility.
+3) Harmonization and temporal density checks are mandatory.
+   - Ensure sufficient observations (e.g., > 20) before running segmentation.
+   - If cross-sensor (Landsat+S2), harmonize radiometry first; otherwise avoid mixing.
+4) Breakpoint timestamp format must be interpreted correctly.
+   - CCDC breakpoint output may need post-conversion (e.g., fractional-year or epoch-like value depending on dateFormat).
+   - Never map events without converting/validating time units.
+5) Apply artifact filtering rules before attribution.
+   - Remove low-confidence or tiny-magnitude breaks.
+   - Filter isolated single-pixel noise with spatial consistency checks.
+   - Use minimum affected-area threshold to avoid salt-and-pepper false alarms.
+6) Use an attribution logic tree, not a single threshold.
+   - Example logic:
+   - if NBR drop is large and persistent vegetation loss -> likely forest disturbance
+   - if built-up proxy rises while vegetation declines near urban fringe -> likely urban expansion
+   - if abrupt drop and partial recovery in short window with meteorological evidence -> likely disaster event
+7) Respect Earth Engine lazy execution.
+   - Run segmentation server-side and retrieve only final compact metrics/layers for interpretation.
+
+Positive ReAct trajectory:
+- Observe:
+  - inspect multi-year observation count and cloud-masked quality
+  - inspect breakpoint band suitability for target disturbance types
+- Think:
+  - choose stable CCDC parameter set balancing sensitivity vs false positives
+  - design post-CCDC filtering + attribution logic tree
+- Act:
+  - run CCDC on prepared collection
+  - extract first/major breakpoint timing and magnitude
+  - apply artifact filters and classify likely event attribution classes
+
+Reference Python snippet (GEE API):
+```python
+import ee
+
+ee.Initialize(project="ee-hku-geog7310")
+
+aoi = ee.Geometry.Point([114.1694, 22.3193]).buffer(2000)
+
+def prep_l8(img):
+    qa = img.select("QA_PIXEL")
+    mask = qa.bitwiseAnd(1 << 4).eq(0).And(qa.bitwiseAnd(1 << 3).eq(0)).And(qa.bitwiseAnd(1 << 5).eq(0))
+    sr = img.select(["SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7"]).multiply(0.0000275).add(-0.2)
+    ndvi = sr.normalizedDifference(["SR_B5", "SR_B4"]).rename("NDVI")
+    nbr = sr.normalizedDifference(["SR_B5", "SR_B7"]).rename("NBR")
+    return img.addBands([ndvi, nbr], overwrite=True).updateMask(mask)
+
+ts = (
+    ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+    .filterBounds(aoi)
+    .filterDate("2015-01-01", "2024-01-01")
+    .map(prep_l8)
+    .select(["NDVI", "NBR"])
+)
+
+ccdc = ee.Algorithms.TemporalSegmentation.Ccdc(
+    ts,
+    ["NDVI", "NBR"],      # breakpointBands
+    ["NDVI", "NBR"],      # tmaskBands
+    6,                    # minObservations
+    0.99,                 # chiSquareProbability
+    1.33,                 # minNumOfYearsScaler
+    2,                    # dateFormat
+    20.0,                 # lambda
+    25000,                # maxIterations
+)
+
+first_tbreak = ccdc.select("tBreak").arrayGet([0]).rename("first_tbreak")
+first_mag = ccdc.select("NDVI_magnitude").arrayGet([0]).rename("first_ndvi_mag")
+
+summary = first_tbreak.addBands(first_mag).reduceRegion(
+    reducer=ee.Reducer.mean(),
+    geometry=aoi,
+    scale=30,
+    bestEffort=True,
+    maxPixels=1_000_000,
+)
+
+print("First breakpoint:", summary.get("first_tbreak").getInfo())
+print("First NDVI magnitude:", summary.get("first_ndvi_mag").getInfo())
+```
+
+Anti-patterns to avoid:
+- Running CCDC on unmasked L2 imagery with cloud artifacts.
+- Ignoring dateFormat semantics and misreading breakpoint timestamps.
+- Using one global threshold for all change types without attribution logic.
+- Skipping post-CCDC artifact filtering and directly mapping raw breakpoints as events.
+
+Expected behavior for this pattern:
+- The workflow produces reproducible breakpoint timing/magnitude outputs and a defendable event-attribution baseline suitable for forest disturbance, urban expansion, and disaster screening.
+===
