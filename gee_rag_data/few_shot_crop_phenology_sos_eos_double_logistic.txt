@@ -1,0 +1,86 @@
+## FEW_SHOT: Crop phenology from Sentinel-2 NDVI time series (Double Logistic SOS / EOS)
+
+Intent: execution
+Task type: agricultural phenology, season onset/offset, growing-season length from dense optical NDVI
+Keywords: phenology, 物候, SOS, EOS, start of season, end of season, growing season length, 生长季, 生长季长度, Double Logistic, 双逻辑斯谛, 逻辑斯谛拟合, Sentinel-2, S2, NDVI, time series, 时序, 高频, AOI, 农田, 田块, precision agriculture, 精准农业, yield forecasting, 产量预测
+
+User task patterns:
+- "对给定农田 AOI，用 Sentinel-2 高频 NDVI 时序做双逻辑斯谛拟合，提取 SOS / EOS 和生长季长度"
+- "基于 S2 NDVI 曲线识别作物生长季开始与结束，用于精准农业或产量预测"
+- "Extract SOS, EOS, and length of growing season from Sentinel-2 NDVI for a field parcel"
+
+## Dataset profile (Earth Engine)
+
+Primary optical stack (surface reflectance, per-scene cloud QA):
+- ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+  - NDVI: `normalizedDifference(['B8','B4']).rename('NDVI')` after masking clouds/shadows with `QA60` (bits for opaque clouds and cirrus) and optionally SCL / probability masks if user requests stricter masking.
+  - Typical scale for agricultural summaries: 10 m native; for regional AOI means use explicit `scale` in reducers (e.g. 10 or 20 m) and report it.
+
+Why Sentinel-2 for phenology:
+- Revisit interval supports **dense** intra-season sampling vs Landsat-only workflows; document actual median revisit used in the AOI after filtering.
+
+Selection / compositing rules:
+1) **Filter** `filterBounds(aoi)` + `filterDate(start, end)` + cloud/shadow mask on each image.
+2) Prefer **one clear NDVI value per time stamp** per pixel (or per AOI mean): either daily best-pixel, or fixed-interval composites (e.g. 5-day or 8-day median) to dampen noise before fitting.
+3) If multi-temporal stacks are reduced to an **AOI-level** series (single NDVI vs time for the whole field), use `reduceRegion` with `ee.Reducer.mean()` (or median) per image after masking; print `valid_pixel_fraction` per date where feasible.
+
+## Method: Double Logistic (DL) fit on NDVI seasonal trajectory
+
+Model intent (conceptual — state in narrative and code comments):
+- NDVI seasonal cycle is approximated by a **double logistic** (rising + falling logistic limbs) or equivalent parameterization used in remote-sensing phenology literature.
+- Fitted curve separates green-up, peak plateau, and senescence; **SOS** and **EOS** are derived from thresholds on the fitted curve or its derivatives (define the rule you use and keep it fixed for the run).
+
+Common derivative-based definitions (pick one and print it):
+- **SOS**: first date when fitted NDVI exceeds `vmin + frac * (vmax - vmin)` with `frac` in (0,1) (e.g. 0.2–0.35 for green-up), **or** maximum rate of increase (inflection on rising limb).
+- **EOS**: symmetric rule on descending limb (same `frac` from peak toward minimum), **or** maximum rate of decrease.
+
+Growing season length:
+- `LOS_days = EOS_doy - SOS_doy` (or date difference in days); if the season crosses calendar year, use **water year** or **agronomic year** consistently and state it.
+
+Implementation split (recommended for agent-generated code):
+1) **Earth Engine**: build masked NDVI collection → optional composite cadence → export **(t, NDVI)** series for AOI mean (or for stratified random points if pixel-wise phenology is required).
+2) **Client (Python)**: receive time/value arrays via `getInfo()` on a bounded series or `evaluate` pattern; fit double-logistic parameters with `scipy.optimize.curve_fit` (or documented alternative); compute SOS/EOS/LOS from the fitted curve with the chosen threshold rule.
+   - If the user insists on **server-only** EE: state honestly that full non-linear least squares inside `ee` is non-trivial; default to the **client fit** path above unless a verified EE-native reference is provided.
+
+Quality controls (must mention in outputs):
+- Minimum number of clear observations spanning both shoulders of the season; if below threshold, return null SOS/EOS with reason.
+- Outliers / harvest events: single abrupt drops can bias fits — optional robust loss or pre-screening.
+- Double-cropping regions: either fit **two** cycles per year or restrict date window to one agronomic season; print assumption.
+
+## RAG output checklist (assistant / generated report must include)
+
+1) **Phenology metrics table** (AOI or per-stratum):
+   - `SOS` (calendar date or DOY), `EOS` (calendar date or DOY), `LOS_days` (EOS − SOS).
+   - Units and timezone for dates (UTC vs local solar): pick one and be explicit.
+2) **Fitting summary**: double-logistic (or stated equivalent) formulation, optimization success flag, RMSE / R² of fit to observed NDVI, and the **threshold rule** used to map the curve to SOS/EOS.
+3) **Data lineage**: `COPERNICUS/S2_SR_HARMONIZED`, masking strategy, compositing interval, number of scenes / valid points used, `scale` (m) for reductions.
+4) **Agricultural interpretation**: how SOS/EOS/LOS support precision management or yield modeling (timing of inputs, stress windows) — keep concise and task-linked.
+5) **Caveats**: persistent cloud gaps, mixed pixels at 10 m, intercropping, winter cereals vs summer crops, and uncertainty when `LOS_days` is sensitive to `frac` threshold.
+
+## Critical rules
+
+1) Do not report SOS/EOS without stating the **threshold / inflection rule** and season window.
+2) Never coerce failed fits or insufficient observations to arbitrary dates; return null + diagnostic counts.
+3) Use `ee.Filter` chains; avoid Python `and`/`or` on Earth Engine objects.
+4) Distinguish this workflow from **breakpoint / abrupt change** NDVI tasks (disturbance) and from **single-date** NDVI mapping.
+5) If AOI is unresolved, follow project AOI guardrails (`aoi_source`, valid geometry, no silent 0 fill).
+
+## Minimal workflow outline (orchestrator / sandbox style)
+
+```python
+# Pseudocode — adapt AOI, years, compositing, and SOS/EOS definition.
+# A) EE: s2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED').filterBounds(aoi).filterDate(...)
+#        .map(mask_s2_clouds).map(lambda img: img.normalizedDifference(['B8','B4']).rename('NDVI'))
+# B) EE: build periodic composites (e.g. weekly median) -> list (t_millis, ndvi_mean) via
+#        per-image reduceRegion(reducer=mean, geometry=aoi, scale=20, maxPixels=...)
+# C) Client: t, y = arrays from getInfo / evaluate
+# D) Client: fit double_logistic(t, y) -> y_hat
+# E) Client: SOS, EOS = thresholds_on_fitted_curve(y_hat, t, frac=0.25)  # print frac
+# F) Print SOS, EOS, LOS_days + fit RMSE + n_valid_points
+```
+
+## Related but different tasks
+
+- MODIS MOD13Q1 / VIIRS phenology products: coarser resolution; use only if user accepts ~250–500 m scale or explicitly requests MODIS.
+- Harmonic (Fourier) regression: alternative seasonal model; do not label it as double-logistic unless harmonics are mapped to equivalent SOS/EOS definitions.
+- Simple NDVI max DOY: peak timing only, **not** a substitute for SOS/EOS from a fitted seasonal model unless user explicitly accepts that proxy.

@@ -15,6 +15,7 @@
   {"type": "routing",    "data": {"intent": "execution"}}
   {"type": "planning",   "data": {"plan": [{"description":..., "type":...}, ...]}}
   {"type": "step_start", "data": {"index": 0, "description": "...", "tool": "..."}}
+  {"type": "step_hint", "data": {"index": 0, "message": "..."}}  # gee_executor 长耗时前提示
   {"type": "step_done",  "data": {"index": 0, "description": "...", "tool": "...",
                                   "success": true, "output_preview": "..."}}
   {"type": "summarizing","data": {}}
@@ -34,7 +35,11 @@ from backend.app.tools.explanation.asset_inspector import inspect_asset
 from backend.app.tools.explanation.kb_lookup import knowledge_base_lookup
 from backend.app.tools.execution.gee_executor import execute_gee_snippet
 from backend.app.tools.geo.geocoder import resolve_place
-from backend.app.tools.geo.osm_boundary import AmbiguousBoundaryError, resolve_osm_boundary
+from backend.app.tools.geo.osm_boundary import (
+    AmbiguousBoundaryError,
+    resolve_osm_boundary,
+    resolve_osm_boundary_from_osm_ref,
+)
 from backend.app.agents.prompts import (
     PLANNER_PROMPT,
     CODE_GEN_PROMPT,
@@ -163,7 +168,49 @@ def _query_asks_for_ndvi(query: str) -> bool:
     return "ndvi" in (query or "").lower()
 
 
+def _query_is_burn_dnbr_context(query: str) -> bool:
+    """林火 / dNBR / 过火面积 等任务；用于避免把「dnbr」里的 nbr 误判为光谱 NBR。"""
+    raw = query or ""
+    q = raw.lower()
+    if "dnbr" in q or "d-nbr" in q or "delta nbr" in q:
+        return True
+    if any(t in raw for t in ("nbr差", "nbr 差", "nbr差值", "差值nbr")):
+        return True
+    fire_zh = (
+        "过火",
+        "林火",
+        "森林火",
+        "森林火灾",
+        "火烧迹",
+        "火烈度",
+        "野火",
+        "火灾",
+        "焚毁",
+        "烧毁",
+        "灾前",
+        "灾后",
+        "火烧强度",
+    )
+    if any(t in raw for t in fire_zh):
+        return True
+    fire_en = (
+        "wildfire",
+        "forest fire",
+        "burn severity",
+        "burned area",
+        "burn scar",
+        "fire scar",
+        "post-fire",
+        "post fire",
+        "pre-fire",
+        "pre fire",
+    )
+    return any(t in q for t in fire_en)
+
+
 def _query_asks_for_spectral_index(query: str) -> bool:
+    if _query_is_burn_dnbr_context(query):
+        return False
     q = (query or "").lower()
     terms = (
         "ndvi",
@@ -529,7 +576,72 @@ def _format_ambiguous_boundary_reply(place_name: str, options: List[Dict[str, An
         display = option.get("display_name") or option.get("name") or "未知边界"
         osm_ref = f"{option.get('osm_type')} {option.get('osm_id')}"
         lines.append(f"{i}. {display} [{osm_ref}]")
+    lines.append(
+        "下一步请任选其一：只发送序号 **1**–**5**（对应上表第几项），"
+        "或在任意一句话里带上标记如 **`[relation 913110]`**（把数字换成你选的 relation/way/node id）。"
+        "系统会记住你的选择，然后再执行后面的遥感任务。"
+    )
     return "\n".join(lines)
+
+
+_OSM_REF_RE = re.compile(
+    r"\b(relation|way|node)\s*[:\s#]*(\d{3,})\b",
+    re.IGNORECASE,
+)
+_OSM_SHORT_REF_RE = re.compile(r"\b([RWN])\s*(\d{3,})\b", re.IGNORECASE)
+
+
+def _parse_osm_ref_from_query(query: str) -> Optional[tuple[str, str]]:
+    """返回 (osm_type, osm_id_str)，例如 ('relation', '913110')。"""
+    text = (query or "").replace("【", "[").replace("】", "]")
+    m = _OSM_REF_RE.search(text)
+    if m:
+        return (m.group(1).lower(), m.group(2))
+    m2 = _OSM_SHORT_REF_RE.search(text)
+    if m2:
+        letter = m2.group(1).upper()
+        mp = {"R": "relation", "W": "way", "N": "node"}
+        return (mp[letter], m2.group(2))
+    return None
+
+
+def _parse_candidate_choice_from_query(query: str, state: WorkflowState) -> Optional[tuple[str, str]]:
+    """若会话里已有上次的边界候选项，解析用户只发序号时的选择。"""
+    bundle = state["context"].get("aoi_boundary_candidates") or {}
+    options = bundle.get("options") or []
+    if not options:
+        return None
+    q = (query or "").strip()
+    m = re.match(r"^(?:选|选择|用)?\s*第?\s*([1-5])\s*(?:个|项|条)?[\.。!！]?\s*$", q)
+    if not m:
+        return None
+    idx = int(m.group(1)) - 1
+    if idx < 0 or idx >= len(options):
+        return None
+    opt = options[idx]
+    ost = (opt.get("osm_type") or "").strip().lower()
+    oid = opt.get("osm_id")
+    if not ost or oid is None:
+        return None
+    try:
+        return (ost, str(int(oid)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _try_resolve_osm_disambiguation(state: WorkflowState) -> Optional[Dict[str, Any]]:
+    """用户粘贴 [relation 913110] 或回复序号时，直接解析为唯一边界。"""
+    query = state["query"] or ""
+    ref = _parse_osm_ref_from_query(query)
+    if not ref:
+        ref = _parse_candidate_choice_from_query(query, state)
+    if not ref:
+        return None
+    osm_type, osm_id = ref
+    resolved = resolve_osm_boundary_from_osm_ref(osm_type, osm_id)
+    if resolved.get("status") != "ok":
+        return None
+    return resolved
 
 
 def _map_context_from_aoi_boundary(context: Dict[str, Any]) -> Dict[str, Any]:
@@ -595,6 +707,12 @@ def _prepare_aoi_boundary_context(state: WorkflowState) -> Optional[str]:
     if _extract_asset_ids(state["query"]):
         return None
 
+    clarified = _try_resolve_osm_disambiguation(state)
+    if clarified:
+        state["context"]["aoi_boundary"] = clarified
+        state["context"].pop("aoi_boundary_candidates", None)
+        return None
+
     existing = state["context"].get("aoi_boundary") or {}
     place_name = _extract_aoi_place_name(state["query"])
     if not place_name:
@@ -607,6 +725,13 @@ def _prepare_aoi_boundary_context(state: WorkflowState) -> Optional[str]:
             return (
                 "我理解你想基于上一张影像继续分析，但当前会话里没有可复用的 AOI 边界。"
                 "请先生成一张影像，或在问题里明确行政区名称，例如「广州」。"
+            )
+        if _query_is_burn_dnbr_context(state["query"]):
+            return (
+                "可以基于 Sentinel-2 或 Landsat 计算 dNBR（火前/火后 NBR 差值）并按轻、中、重度过火等级统计面积，"
+                "但需要先确定空间范围（行政区名、经纬度范围或 GEE 边界 asset），以及火前、火后各自的影像时间窗（或大致火点日期）。\n"
+                "请补充，例如：「云南普洱市，灾前 2024-01~2024-02 vs 灾后 2024-04~2024-05，Sentinel-2，"
+                "dNBR 分轻中重度并输出公顷/平方公里」。"
             )
         if _query_asks_for_spectral_index(state["query"]):
             return (
@@ -622,6 +747,15 @@ def _prepare_aoi_boundary_context(state: WorkflowState) -> Optional[str]:
     try:
         resolved = resolve_osm_boundary(place_name)
     except AmbiguousBoundaryError as exc:
+        prev = state["context"].get("aoi_boundary_candidates") or {}
+        prev_place = str(prev.get("place_name") or "").strip().lower()
+        cur_place = place_name.strip().lower()
+        if prev_place and prev_place == cur_place:
+            return (
+                "仍在等待你选择上一条消息里的边界：请只发 **1**–**5** 的序号，"
+                "或在句子里带上 **`[relation 数字]`**（与列表中一致）；"
+                "确认后再发完整任务（例如「用 Sentinel-2 算2022年香港dNBR」）。"
+            )
         state["context"]["aoi_boundary_candidates"] = {
             "place_name": exc.place_name,
             "options": exc.options,
@@ -1633,6 +1767,17 @@ async def stream_workflow(
                 "description": step.get("description", f"步骤 {i+1}"),
                 "tool": tool_name,
             })
+            if tool_name == "gee_executor":
+                yield _evt(
+                    "step_hint",
+                    {
+                        "index": i,
+                        "message": (
+                            "Earth Engine 正在执行本步代码；大范围 + 10m 等尺度统计可能持续数分钟，"
+                            "此期间不会有新事件，并非卡死。完成后会自动出现下一步或完成标记。"
+                        ),
+                    },
+                )
             state = await _execute_step(state, step, i)
             done_result = state["steps"][-1]
             yield _evt("step_done", {

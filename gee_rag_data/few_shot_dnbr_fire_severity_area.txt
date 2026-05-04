@@ -1,0 +1,99 @@
+## FEW_SHOT: Forest fire burned area and severity with dNBR (NBR delta)
+
+Intent: execution
+Task type: burn severity zoning and areal statistics
+Keywords: dNBR, NBR, burn severity, forest fire, wildfire, 过火, 火烈度, 过火面积, Sentinel-2, Landsat 8, Landsat 9, SWIR, NIR, 公顷, 平方公里
+
+User task patterns:
+- "用 Sentinel-2 计算火灾前后 dNBR，划分轻中重度并统计面积"
+- "基于 Landsat 8 做过火面积和 NBR 差值，输出各等级公顷数"
+- "评估森林火灾严重程度，归一化过火指数差值，分等级统计"
+
+## Definitions (must use consistently)
+
+NBR (Normalized Burn Ratio):
+  NBR = (NIR - SWIR2) / (NIR + SWIR2)
+  Use the same SWIR2 definition as the chosen sensor (S2: B12; Landsat: SR_B7).
+
+dNBR (delta NBR, pre-fire minus post-fire):
+  dNBR = NBR_pre - NBR_post
+  Positive dNBR generally indicates loss of healthy vegetation / increased burn signal
+  in the NBR formulation above (pre is healthier / higher NBR than charred post).
+
+Composites:
+  Build cloud-minimized composites for a pre-fire window and a post-fire window
+  (not single scenes unless user insists). Use per-pixel median or quality mosaic
+  over several months, avoiding anniversary dates with different phenology when possible.
+
+## Dataset profile (band mapping and reflectance)
+
+COPERNICUS/S2_SR_HARMONIZED:
+  cloud_property = "CLOUDY_PIXEL_PERCENTAGE"
+  nir = "B8" or "B8A" (prefer B8 for NBR if documented for your pipeline; B8 is common for NBR)
+  swir2 = "B12"
+  reflectance: multiply band values by 0.0001 (scale to 0..1) before NBR.
+  native_scale = 10
+  cloud_mask: SCL (mask clouds/shadow/saturated as appropriate)
+
+LANDSAT/LC08/C02/T1_L2 and LANDSAT/LC09/C02/T1_L2:
+  cloud_property = "CLOUD_COVER"
+  nir = "SR_B5"
+  swir2 = "SR_B7"
+  reflectance: img.multiply(0.0000275).add(-0.2) on optical SR bands before NBR.
+  native_scale = 30
+  cloud_mask: QA_PIXEL
+
+Critical rules:
+1) Never use CLOUDY_PIXEL_PERCENTAGE on Landsat collections; use CLOUD_COVER for collection-level filters only.
+2) Use the same NIR/SWIR2 band pair for pre and post so dNBR is comparable.
+3) Align pre/post to similar season if the fire date allows, to reduce phenology bias; if user gives explicit pre/post date ranges, follow those.
+4) Clip or reduce statistics to the user AOI; print aoi_source and valid pixel counts.
+5) Report areas in m2, ha (m2/10000), and km2 (m2/1e6) for each severity class.
+6) Do not coerce missing reductions to 0; explain nulls.
+7) Use ee.Filter.And / chain .filter for combinations; avoid Python boolean shortcuts on ee objects.
+
+## Severity zones (three main levels + optional unburned)
+
+These thresholds follow a common USGS-style interpretation on continuous dNBR
+(in reflectance-based NBR space, not multiplied by 1000). Adjust only if user
+supplies a different standard.
+
+Optional stable / unburned / regrowth guard (report as class label, not "severe"):
+  dNBR < 0.10  -> class "below_threshold" or "non_burn_signal" (label clearly in Chinese)
+
+Three primary severity bands for "轻度 / 中度 / 重度":
+  Mild (轻度):      0.10 <= dNBR < 0.27
+  Moderate (中度):  0.27 <= dNBR < 0.44
+  Severe (重度):    dNBR >= 0.44
+
+If user asks for USGS-style four or five classes, extend with:
+  Very low / increased green: dNBR < 0.10
+  High subset: split 0.44-0.66 vs >0.66 as "高" and "极高" when requested.
+
+## RAG output checklist (what the assistant should print)
+
+1) Fire event context: assumed fire window or user-provided fire date; pre window; post window.
+2) Sensors used: S2 HARMONIZED and/or Landsat 8/9 L2, with scale (m) used in reductions.
+3) Per-class pixel area and share of AOI:
+   - area_m2, area_ha, area_km2 for 轻度, 中度, 重度, and optionally below_threshold.
+4) Total burned-area proxy: sum of mild+moderate+severe unless user defines "burned" differently; state definition.
+5) Caveats: clouds, shadows, phenology, BRDF, misregistration, unburned dark surfaces can bias dNBR; recommend visual check with true color and SWIR composite.
+
+## Minimal Earth Engine Python outline (orchestrator / sandbox style)
+
+```python
+# Pseudocode skeleton — adapt dates, AOI, and collection to user query.
+# 1) Build pre_image and post_image as cloud-screened medians in their windows.
+# 2) Compute NBR_pre, NBR_post on reflectance-scaled images.
+# 3) dNBR = NBR_pre.subtract(NBR_post)
+# 4) Build masks: mild = dNBR.gte(0.1).And(dNBR.lt(0.27)), etc.
+# 5) For each mask: area = mask.multiply(ee.Image.pixelArea()).reduceRegion(
+#        ee.Reducer.sum(), geometry=aoi, scale=native_scale, maxPixels=1e13, bestEffort=True
+#    ).get("NBR")  # use rename on mask layer so band name is predictable
+# 6) Print ha and km2 from summed m2.
+```
+
+## Related indices in the same family
+
+If user mixes terms: RdNBR (relative dNBR) and BI (Burn Index) are different products;
+this few-shot focuses on dNBR from NBR pre/post only unless user explicitly asks otherwise.

@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover - optional dependency
 
 
 NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
+NOMINATIM_LOOKUP_URL = "https://nominatim.openstreetmap.org/lookup"
 
 
 def osm_user_agent() -> str:
@@ -66,6 +67,35 @@ def nominatim_search(
     )
     with urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def nominatim_lookup_osm(osm_type: str, osm_id: int | str) -> List[Dict[str, Any]]:
+    """按 OSM type + id 拉取单条记录（含 polygon_geojson），用于歧义消解后的精确边界。"""
+    typ = (osm_type or "").strip().lower()
+    try:
+        oid = int(osm_id)
+    except (TypeError, ValueError):
+        return []
+    prefix = {"relation": "R", "way": "W", "node": "N"}.get(typ)
+    if not prefix:
+        return []
+    params = {
+        "osm_ids": f"{prefix}{oid}",
+        "format": "jsonv2",
+        "addressdetails": "1",
+        "extratags": "1",
+        "polygon_geojson": "1",
+    }
+    req = Request(
+        NOMINATIM_LOOKUP_URL + "?" + urlencode(params),
+        headers={
+            "User-Agent": osm_user_agent(),
+            "Accept": "application/json",
+        },
+    )
+    with urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return data if isinstance(data, list) else []
 
 
 def _fallback_places() -> Dict[str, Tuple[float, float, List[float]]]:

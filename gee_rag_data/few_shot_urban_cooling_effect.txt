@@ -1,0 +1,103 @@
+## FEW_SHOT: Urban Cooling Effect of Green Spaces with LST Buffer Analysis
+
+Intent: execution
+Task type: urban thermal mitigation assessment, green-space cooling service quantification
+Keywords: urban cooling effect, 城市绿地降温, park cooling island, PCI, LST, 缓冲区, Buffer Analysis, 冷岛效应, cooling amplitude, cooling distance, urban park, forest, green space, 降温幅度, 降温服务距离
+
+User task patterns:
+- "量化城市公园/森林对周边热环境的降温作用，并计算降温影响范围"
+- "基于 LST 和缓冲区分析，对比绿地内部与边缘不同距离温度，输出降温幅度和服务距离"
+- "Estimate urban green-space cooling amplitude and cooling service distance using LST buffers"
+
+## Dataset profile (Earth Engine)
+
+Primary LST options:
+- Landsat 8/9 L2 ST:
+  - `LANDSAT/LC08/C02/T1_L2`, `LANDSAT/LC09/C02/T1_L2`
+  - Celsius conversion: `LST_C = ST_B10 * 0.00341802 + 149.0 - 273.15`
+  - Native scale ~30 m, suitable for park-scale gradients
+- Optional seasonal robustness:
+  - Use warm-season multi-scene mean/median instead of single scene to suppress random weather noise
+
+Green-space masks / boundaries:
+- User-provided polygon (preferred) for target park/forest
+- Or classify from existing land-cover layer (e.g., WorldCover classes mapped to vegetation)
+- Ensure geometry validity and AOI clipping before zonal statistics
+
+## Method: concentric buffer cooling-gradient analysis
+
+Core design:
+1) Build `LST_C` image in a fixed period (e.g., summer season).
+2) Define green-space core polygon (`green_core`).
+3) Build outward ring buffers around core boundary, e.g.:
+   - 0-100 m, 100-200 m, 200-300 m ... up to user-defined max distance.
+4) Compute mean LST for:
+   - inside core (`LST_in`)
+   - each ring (`LST_ring_d`)
+5) Derive cooling metrics:
+   - Cooling amplitude (core vs hottest near-edge ring):
+     - `Delta_LST_max = max(LST_ring_d) - LST_in` (deg C)
+   - Distance-specific cooling:
+     - `Delta_LST_d = LST_ring_d - LST_in`
+   - Cooling service distance (`D_cool`):
+     - farthest distance where `Delta_LST_d` remains above threshold (e.g., >= 0.5 C)
+     - threshold must be printed, not hidden
+
+Recommended robustness checks:
+- Require minimum valid pixels per ring; if too few, return null and diagnostics
+- Keep reducer scale fixed across rings to avoid pseudo-gradient artifacts
+- Report sample date range and image count for reproducibility
+
+## Area-cooling relationship output (mandatory)
+
+When user asks for "绿地面积与降温效果相关性":
+1) Build sample set of multiple green patches in city AOI.
+2) For each patch compute:
+   - `green_area_ha`
+   - `Delta_LST_max`
+   - `D_cool`
+3) Report correlation:
+   - Pearson/Spearman correlation between area and `Delta_LST_max`
+   - optional correlation between area and `D_cool`
+4) Print regression/fit summary (if used) and sample count `n`.
+
+## RAG output checklist (assistant/report must include)
+
+1) Data lineage:
+   - LST source collection id, conversion formula, date window, composite rule, scale
+2) Buffer design:
+   - ring width, max distance, threshold used for service distance
+3) Cooling metrics:
+   - `LST_in`, `LST_ring_d` profile
+   - `Delta_LST_max` (deg C)
+   - `D_cool` (m)
+4) Area-effect relation:
+   - green-space area statistics and correlation results
+5) Uncertainty notes:
+   - cloud contamination, seasonality, topography/shadow, mixed pixels, anthropogenic heat sources
+
+## Critical rules
+
+1) Do not use raw ST_B10 integers as temperature; always convert to physical units.
+2) Do not infer cooling distance from one arbitrary ring; must use full distance profile.
+3) Do not mix periods across parks when comparing area-effect relationships.
+4) Do not silently fill null ring reductions with zero.
+5) Use `ee.Filter` and server-side operations; avoid Python boolean shortcuts on ee objects.
+
+## Minimal Earth Engine outline (orchestrator / sandbox style)
+
+```python
+# Pseudocode: park cooling profile from LST buffers
+# 1) Build seasonal LST_C image from Landsat L2 ST_B10 conversion.
+# 2) Define green_core polygon (park/forest).
+# 3) Generate ring geometries at fixed step distances.
+# 4) For each ring: compute mean LST_C by reduceRegion.
+# 5) Compute Delta_LST_d = LST_ring_d - LST_in.
+# 6) Derive Delta_LST_max and D_cool (threshold-based).
+# 7) If multiple parks: correlate green_area_ha with Delta_LST_max / D_cool.
+```
+
+## Related but different tasks
+
+- Urban Heat Island intensity (urban-rural contrast) is not identical to park cooling distance analysis.
+- Air temperature station analysis is not LST-based surface cooling unless explicitly fused with station data.

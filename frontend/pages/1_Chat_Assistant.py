@@ -162,6 +162,9 @@ with st.sidebar:
                                     wf_status.update(label=f"⏳ 步骤 {idx+1}{total_label}：{desc}")
                                     st.write(f"⏳ **步骤 {idx+1}**：{desc}  `{tool}`")
 
+                                elif etype == "step_hint":
+                                    st.caption(edata.get("message", ""))
+
                                 elif etype == "step_done":
                                     idx = edata.get("index", 0)
                                     desc = edata.get("description", "")

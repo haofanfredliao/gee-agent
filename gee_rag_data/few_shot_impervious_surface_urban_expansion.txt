@@ -1,0 +1,120 @@
+## FEW_SHOT: Urban impervious surface expansion with Landsat time series + VIIRS weighting
+
+Intent: execution
+Task type: long-term urban expansion detection and decade-level comparison
+Keywords: impervious surface, urban expansion, built-up, NDBI, MNDWI, NDVI, Landsat, VIIRS, nighttime lights, 城市扩张, 不透水面, 年增长率, 十年对比, 城市足迹, 建筑区, 道路
+
+User task patterns:
+- "用 Landsat 长时间序列提取城市不透水面，并计算年扩张速率"
+- "结合 VIIRS 夜间灯光加权，分析城市建筑区和道路扩张"
+- "比较 2000s、2010s、2020s 不同十年的城市足迹变化"
+
+## Dataset profile (Earth Engine)
+
+Recommended long-term Landsat stack (Collection 2 Level-2):
+- ee.ImageCollection('LANDSAT/LT05/C02/T1_L2')  # 1984-2012
+- ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')  # 1999-now (SLC-off after 2003; use compositing)
+- ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')  # 2013-now
+- ee.ImageCollection('LANDSAT/LC09/C02/T1_L2')  # 2021-now
+
+Nighttime lights weighting:
+- ee.ImageCollection('NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG')
+  - Use annual median/mean of `avg_rad` as urban activity weight.
+  - VIIRS starts in 2012; for earlier decades, state no VIIRS weighting is available and fall back to spectral-only extraction or calibrate with a reference year.
+
+Reflectance and QA:
+- Landsat L2 optical bands require scaling: multiply by 0.0000275 and add -0.2.
+- Apply QA_PIXEL cloud/shadow/snow masking before index calculation.
+
+## Definitions (must be explicit)
+
+Impervious surface proxy:
+- Build a transparent score, for example:
+  - high NDBI (built-up tendency),
+  - low NDVI (non-vegetated),
+  - low MNDWI (non-water),
+  - optional VIIRS weight to suppress non-urban bare land.
+- Example normalized score (0-1):
+  impervious_score = norm(NDBI) * (1 - norm(NDVI)) * (1 - norm(MNDWI)) * viirs_weight
+
+Binary impervious mask:
+- Apply threshold on `impervious_score` (or on a rule-based combination) to produce `impervious_mask`.
+- Threshold must be printed and justified (fixed threshold or AOI-adaptive percentile).
+
+Urban footprint area:
+- impervious_area_km2(year) = sum(pixelArea where impervious_mask==1) / 1e6
+
+Annual Growth Rate (AGR):
+- For interval [t0, t1]:
+  AGR_km2_per_year = (A_t1 - A_t0) / (t1 - t0)
+  AGR_pct_per_year = ((A_t1 / A_t0)^(1/(t1 - t0)) - 1) * 100  # only when A_t0 > 0
+
+Decadal comparison:
+- Compute area at each decade anchor (e.g. 2000, 2010, 2020) or decade means.
+- Report delta area and AGR for each decade interval (2000-2010, 2010-2020, 2020-2025 if requested).
+
+## Method workflow
+
+1) Time slicing:
+   - Build annual (or multi-year median) Landsat composites in AOI.
+   - Keep season consistent across years (e.g. same dry season months) to reduce phenology bias.
+
+2) Impervious extraction:
+   - Compute NDVI/NDBI/MNDWI from scaled reflectance.
+   - Build impervious score and threshold to binary mask per year.
+   - For 2012+, multiply by VIIRS-derived urban weight (bounded to reasonable range, e.g. 0.5-1.5 after normalization).
+
+3) Area estimation:
+   - For each target year/decade, calculate impervious area (km2) and share of AOI.
+   - Keep reduction scale consistent (typically 30 m for Landsat-based results).
+
+4) Trend metrics:
+   - Fit linear trend of impervious area vs year (optional slope).
+   - Mandatory: compute AGR for each requested interval and decade pair.
+
+5) Validation hints (if labels unavailable):
+   - Visual cross-check against high-res basemap for sample zones.
+   - Compare impervious growth hotspots with increasing VIIRS intensity.
+
+## RAG output checklist (assistant must include)
+
+1) Data and period:
+   - Landsat collections used, compositing season, year range, AOI source.
+   - Whether VIIRS weighting is used and from which years.
+
+2) Core expansion statistics:
+   - Impervious area (km2) for each key year/decade.
+   - Annual Growth Rate in both km2/year and %/year (where valid).
+   - Net expansion and relative expansion ratio.
+
+3) Decadal urban footprint comparison:
+   - 2000s vs 2010s vs 2020s footprint changes (area delta + AGR).
+   - Identify fastest-growth decade and possible spatial shift direction (if computed).
+
+4) Caveats:
+   - Spectral confusion with bare soil/construction sites.
+   - Cross-sensor consistency and Landsat-7 SLC-off artifacts.
+   - VIIRS unavailable before 2012 and coarse resolution mismatch vs Landsat.
+
+## Critical rules
+
+1) Do not claim VIIRS-weighted results for years before VIIRS availability without explicit fallback statement.
+2) Do not mix unscaled and scaled Landsat reflectance in index calculations.
+3) Use consistent seasonal windows when comparing across decades.
+4) Always print thresholding logic and reduction scale.
+5) For AGR percentage, guard against division by zero or tiny baseline area.
+
+## Minimal Earth Engine Python outline (orchestrator / sandbox style)
+
+```python
+# Pseudocode skeleton; adapt AOI/date windows/thresholds to the query.
+# 1) Build annual Landsat composite (cloud-masked, scaled reflectance).
+# 2) Compute NDVI, NDBI, MNDWI; create impervious_score.
+# 3) If year >= 2012, derive viirs_weight from annual VIIRS avg_rad and apply weighting.
+# 4) impervious_mask = impervious_score.gte(threshold)
+# 5) area_km2 = impervious_mask.multiply(ee.Image.pixelArea()).reduceRegion(...).get(...) / 1e6
+# 6) Repeat for key years; compute:
+#    agr_km2 = (A_t1 - A_t0) / (t1 - t0)
+#    agr_pct = ((A_t1 / A_t0) ** (1.0 / (t1 - t0)) - 1.0) * 100.0
+# 7) Print decadal table: area, delta, AGR.
+```

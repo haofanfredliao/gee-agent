@@ -1,0 +1,95 @@
+## FEW_SHOT: Surface soil moisture anomaly & agricultural drought (SMAP / GLDAS)
+
+Intent: execution
+Task type: soil moisture deviation, drought index from percentiles, comparison to historical same-period mean
+Keywords: SMAP, SPL3SMP, GLDAS, NOAH, soil moisture, 土壤湿度, 土壤水分, 墒情, 农业干旱, percentile, 百分位, anomaly, 偏离, 历史同期, AOI
+
+User task patterns:
+- "用 NASA SMAP 或 GLDAS 做区域土壤湿度偏离度 / 异常监测"
+- "基于土壤水分百分位数判断 AOI 是否处于农业干旱，并对比历史同期均值"
+- "输出干旱指数统计：当前期相对多年同期的分位数与距平"
+
+## Dataset profile (Earth Engine)
+
+Primary observation product (radiometer L3, daily):
+- ee.ImageCollection('NASA/SMAP/SPL3SMP_E/005')
+  - Typical soil moisture bands: `soil_moisture_am`, `soil_moisture_pm` (volumetric m³/m³, ~top 5 cm signal; see catalog for latest version e.g. 006 if 005 deprecated).
+  - Native grid ~9 km; resample only with explicit scale/crs and state the scale in outputs.
+  - Quality: mask fill values / QA flags per dataset documentation; do not treat nodata as 0.
+
+Model / reanalysis alternative (3-hourly, 0.25°):
+- ee.ImageCollection('NASA/GLDAS/V021/NOAH/G025/T3H')
+  - Surface layer commonly used: `SoilMoi0_10cm_inst` (kg/m² over 0–10 cm column; not identical to SMAP volumetric — do not mix units across products in one index without conversion notes).
+  - Aggregate to daily or weekly means for drought monitoring to reduce diurnal noise unless user asks for sub-daily.
+
+Selection rule:
+- If user names SMAP → prefer SMAP L3 (or user-specified SMAP L4).
+- If user names GLDAS / model → use GLDAS NOAH collection above (or user-specified GLDAS path).
+- If ambiguous → pick one product, justify resolution vs AOI size, and warn against comparing raw values across products.
+
+## Method: historical same-period baseline and percentile drought
+
+Define clearly in code comments and printed summary:
+
+1) Current evaluation window (analysis period):
+   - User-provided date range, or a single month/season; build a composite per pixel: mean (or median) soil moisture over valid images in the window.
+
+2) Historical baseline pool ("历史同期"):
+   - Same calendar sub-period across multiple baseline years (e.g. same month-of-year, or same DOY ±7 days window each year).
+   - Minimum year span: state N years used (e.g. 2000–2023 excluding current if leakage-sensitive); if short, print caveat.
+
+3) Per-pixel or regional statistics (match user AOI):
+   - For each pixel (or after reducing to AOI mean): collect baseline values into an array or use `ee.Reducer.percentile` on a multi-year stack of same-period composites.
+   - Percentile rank of current composite within baseline distribution → `sm_percentile` (0–100).
+   - Historical same-period mean → `sm_hist_mean`; current mean → `sm_curr_mean`.
+   - Anomaly / deviation: `sm_anomaly = sm_curr_mean - sm_hist_mean` and optionally `sm_anomaly_pct = 100 * sm_anomaly / sm_hist_mean` where division is safe (mask near-zero denominators).
+
+4) Agricultural drought flag (percentile method — must be explicit):
+   - Use transparent, printed thresholds, e.g.:
+     - `is_ag_drought = sm_percentile <= 20`  (dry vs historical; adjust to 10/15/30 only if user specifies USDM-style or local standard).
+   - Always print the numeric percentile and threshold used; do not hard-code silently.
+
+5) AOI-level summary (mandatory for "区域" questions):
+   - `reduceRegion` on AOI: mean/median of `sm_percentile`, `sm_curr_mean`, `sm_hist_mean`, `sm_anomaly`, and area fraction with `is_ag_drought == 1` if map is binary.
+   - Report `aoi_source`, valid pixel fraction, and scale (m) used.
+
+## RAG output checklist (assistant / generated report must include)
+
+1) Data product: SMAP vs GLDAS (and collection id), band name, units, native resolution, compositing rule (mean/median over analysis window).
+2) Drought index statistics table (AOI aggregate and optionally distribution summary):
+   - Current-period mean SM, historical same-period mean SM, anomaly (absolute and % if applicable).
+   - Percentile of current period vs historical same-period ensemble (state whether pixel-wise median of percentiles or AOI-mean then percentile — pick one and be consistent).
+3) Agricultural drought verdict for the AOI:
+   - Boolean or category: e.g. `below_20th_percentile -> agricultural_drought_likely` with exact threshold.
+4) Temporal definition: analysis dates, baseline years, same-period definition (month / DOY window).
+5) Caveats: product gaps over dense vegetation / frozen soil, coarse scale vs small AOI, model vs radiometer differences, unit mismatch if switching products.
+
+## Critical rules
+
+1) Never mix SMAP volumetric soil moisture with GLDAS kg/m² in one merged index without unit harmonization and user disclosure.
+2) Do not coerce failed reductions to 0; surface nulls and valid counts.
+3) Use `ee.Filter` chains; avoid Python `and`/`or` on Earth Engine objects.
+4) Align "同期" strictly in calendar or DOY sense; document leap-year handling if using fixed DOY windows.
+5) For small AOIs relative to 9 km SMAP, emphasize sub-grid representativeness and suggest GLDAS or spatial average with uncertainty language.
+
+## Minimal Earth Engine Python outline (orchestrator / sandbox style)
+
+```python
+# Pseudocode — adapt AOI, dates, product, and drought percentile threshold to user query.
+# 1) current_sm = collection.filterDate(analysis_start, analysis_end)
+#        .select(soil_moisture_band).map(quality_mask_fn).mean().clip(aoi)
+# 2) For each baseline year y: sm_y = same calendar (or DOY) window in year y -> composite; collect list.
+# 3) hist = ee.ImageCollection.fromImages(sm_y_list).toBands()  # one band per year, same band name prefixed
+#    sm_hist_mean = hist.reduce(ee.Reducer.mean())
+#    Empirical percentile of current within {sm_y}: use ee.Reducer.percentile on the
+#    stacked baseline only for *baseline* quantiles; for "current vs history" rank,
+#    append current as extra band to arrayReduce(ee.Reducer.min/max) pattern or use
+#    signed distance / count(sm_y < current) / len * 100 — implement one documented approach and print it.
+# 4) is_ag_drought = sm_percentile.lte(20)  # example; print threshold and interpretation
+# 5) reduceRegion: AOI mean/median of SM, percentile, anomaly; fraction of pixels flagged drought.
+```
+
+## Related but different tasks
+
+- NDMI / optical "moisture" indices from Sentinel/Landsat are not SMAP/GLDAS soil moisture; redirect only if user explicitly conflates terms.
+- Meteorological drought indices (SPI/SPEI) require precipitation archives, not this few-shot unless user combines tasks.

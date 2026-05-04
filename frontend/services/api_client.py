@@ -7,8 +7,17 @@ import httpx
 
 # 默认后端地址，可通过环境变量 OVERRIDE_BACKEND_URL 覆盖
 BASE_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8000")
-# 工作流需要串行多次 LLM + GEE 调用，保守设置 5 分钟
-TIMEOUT = float(os.environ.get("CHAT_TIMEOUT", "300"))
+
+
+def _httpx_timeout() -> httpx.Timeout:
+    """流式 /chat/stream 在两次 NDJSON 之间可能长时间无输出（GEE reduceRegion 等），read 必须足够大。"""
+    read_s = float(os.environ.get("CHAT_TIMEOUT", "1200"))
+    conn_s = float(os.environ.get("CHAT_CONNECT_TIMEOUT", "60"))
+    return httpx.Timeout(connect=conn_s, read=read_s, write=read_s, pool=conn_s)
+
+
+# 兼容旧代码：沙箱等仍用总秒数作参考
+TIMEOUT = float(os.environ.get("CHAT_TIMEOUT", "1200"))
 
 
 def _url(path: str) -> str:
@@ -22,7 +31,7 @@ def chat(message: str, session_id: Optional[str] = None, map_context: Optional[D
         payload["session_id"] = session_id
     if map_context:
         payload["map_context"] = map_context
-    with httpx.Client(timeout=TIMEOUT) as client:
+    with httpx.Client(timeout=_httpx_timeout()) as client:
         r = client.post(_url("/chat"), json=payload)
         r.raise_for_status()
         return r.json()
@@ -37,7 +46,7 @@ def chat_stream(
     流式聊天：逐行解析后端 /chat/stream 推送的 newline-delimited JSON 事件。
 
     每次 yield 一个事件字典，type 可能为：
-      "routing" | "planning" | "step_start" | "step_done" | "summarizing" | "done" | "error"
+      "routing" | "planning" | "step_start" | "step_hint" | "step_done" | "summarizing" | "done" | "error"
     """
     payload = {"message": message}
     if session_id:
@@ -48,7 +57,7 @@ def chat_stream(
     stream_error: Optional[Exception] = None
 
     try:
-        with httpx.Client(timeout=TIMEOUT) as client:
+        with httpx.Client(timeout=_httpx_timeout()) as client:
             with client.stream("POST", _url("/chat/stream"), json=payload) as resp:
                 resp.raise_for_status()
                 for line in resp.iter_lines():
@@ -101,7 +110,7 @@ def get_basemap_config() -> Dict[str, Any]:
 
 def run_sandbox_code(code: str) -> Dict[str, Any]:
     """在沙箱中执行 GEE Python 代码，返回 {status, log, tile_url, layers}。"""
-    with httpx.Client(timeout=TIMEOUT) as client:
+    with httpx.Client(timeout=_httpx_timeout()) as client:
         r = client.post(_url("/sandbox/run"), json={"code": code})
         r.raise_for_status()
         return r.json()

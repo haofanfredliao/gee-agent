@@ -152,6 +152,9 @@ GEE_PROJECT_ID=your-gcp-project-id
 GEOCODING_API_KEY=your-geocoding-api-key
 BACKEND_URL=http://127.0.0.1:8000
 DEFAULT_MODEL=default
+# 前端 httpx 等待 LLM+GEE 的最长时间（秒），流式两次事件之间也算「读超时」；重任务可调大
+# CHAT_TIMEOUT=1800
+# CHAT_CONNECT_TIMEOUT=60
 ```
 
 **后端行为相关配置（`configs/settings.yaml`）：**
@@ -196,6 +199,14 @@ PYTHONPATH=. python scripts/build_chroma_index.py
 PYTHONPATH=. uvicorn backend.app.main:app --reload --port 8000
 ```
 
+若联调时出现 **`/chat/stream` 502**、或刚保存代码后立刻请求失败，常见原因是 **`--reload` 正在重启进程**。可改用**无热重载**（更稳，改代码后需手动重启后端）：
+
+```bash
+PYTHONPATH=. uvicorn backend.app.main:app --port 8000
+```
+
+Windows 下也可在项目根目录执行：`powershell -File scripts/run_backend_stable.ps1`。
+
 ### 5. 启动前端
 
 ```bash
@@ -218,7 +229,7 @@ PYTHONPATH=. streamlit run frontend/app.py
 流式事件类型（`/chat/stream`）：
 
 ```
-routing → planning → step_start → step_done → summarizing → done
+routing → planning → step_start → step_hint（可选）→ step_done → summarizing → done
 ```
 
 ---

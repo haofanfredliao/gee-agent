@@ -81,6 +81,10 @@ def _is_hong_kong(place_name: str) -> bool:
     return normalized in {"香港", "hongkong", "hongkongsar", "hongkongchina"}
 
 
+# Nominatim 对「香港」常返回多条 relation；遥感任务默认采用香港特区整体边界（OSM relation）。
+HK_SAR_RELATION_ID = 913110
+
+
 def osm_boundary_cache_path(place_name: str) -> Path:
     """Return the canonical local cache path for a place query."""
     if _is_hong_kong(place_name) and _legacy_hk_path().exists():
@@ -302,12 +306,56 @@ def resolve_osm_boundary(
         reverse=True,
     )
     if _is_ambiguous(ranked, search_name) and not allow_ambiguous:
+        # 避免「香港」在候选项里反复歧义阻塞工作流；若结果中含特区 relation 则默认采用。
+        if _is_hong_kong(place_name):
+            for item in ranked:
+                if (
+                    str(item.get("osm_type") or "").lower() == "relation"
+                    and int(item.get("osm_id") or 0) == HK_SAR_RELATION_ID
+                ):
+                    return _write_feature_collection(path=path, place_name=place_name, item=item)
         raise AmbiguousBoundaryError(
             place_name,
             [_summarize_candidate(item, search_name) for item in ranked[:5]],
         )
 
     return _write_feature_collection(path=path, place_name=place_name, item=ranked[0])
+
+
+def resolve_osm_boundary_from_osm_ref(
+    osm_type: str,
+    osm_id: int | str,
+    *,
+    force_refresh: bool = False,
+) -> Dict[str, Any]:
+    """用 Nominatim lookup 按 relation/way/node + id 解析边界并写入本地缓存。"""
+    from backend.app.services.geocoding import nominatim_lookup_osm
+
+    typ = (osm_type or "").strip().lower()
+    try:
+        oid = int(osm_id)
+    except (TypeError, ValueError):
+        return {"status": "error", "message": f"Invalid osm_id: {osm_id!r}."}
+
+    cache_key = f"osm_{typ}_{oid}"
+    path = _osm_cache_root() / f"{cache_key}.geojson"
+    label = f"{typ} {oid}"
+    if path.exists() and not force_refresh:
+        return _read_cache_metadata(path, label)
+
+    results = nominatim_lookup_osm(typ, oid)
+    if not results:
+        return {
+            "status": "error",
+            "message": f"Nominatim lookup returned no result for {typ} {oid}.",
+        }
+    item = results[0]
+    if not _candidate_geometry(item):
+        return {
+            "status": "error",
+            "message": f"OSM object {typ} {oid} has no polygon geometry in Nominatim response.",
+        }
+    return _write_feature_collection(path=path, place_name=label, item=item)
 
 
 def _iter_geojson_features(data: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
