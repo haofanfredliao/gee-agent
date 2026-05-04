@@ -3,10 +3,16 @@
 对外只暴露 `run(code, gee_module)` 一个函数，屏蔽内部 exec() 细节。
 """
 import io
+import re
 import sys
 from typing import Any, Dict, List, Optional
 
 from backend.app.sandbox.env_rules import SANDBOX_UNSAFE_PATTERNS
+
+_PLACEHOLDER_ASSET_PATTERNS: List[re.Pattern] = [
+    re.compile(r"projects/reference_map_asset_path"),
+    re.compile(r"projects/sample_points_asset_path"),
+]
 
 
 def check_code_safety(code: str) -> Optional[str]:
@@ -21,6 +27,13 @@ def check_code_safety(code: str) -> Optional[str]:
     for pattern in SANDBOX_UNSAFE_PATTERNS:
         if pattern.search(code):
             return f"代码含有被禁止的操作：{pattern.pattern}"
+    for pattern in _PLACEHOLDER_ASSET_PATTERNS:
+        if pattern.search(code):
+            return (
+                "检测到占位资产路径，缺少真实可读的 asset ID。"
+                "请提供真实路径或使用已验证默认路径。"
+                " BLOCKED_MISSING_ASSET_IDS"
+            )
     return None
 
 

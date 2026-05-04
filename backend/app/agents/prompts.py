@@ -52,6 +52,10 @@ PLANNER_PROMPT = """\
 5. 若参考知识中存在“已弃用/替代”关系，必须使用替代后的 canonical 数据集 ID。
    例如：Sentinel-2 SR 必须使用 "COPERNICUS/S2_SR_HARMONIZED"，不得使用 "COPERNICUS/S2_SR"。
 6. 严禁凭空引入用户未提供、会话上下文也未出现的私有资产路径（projects/.../assets/...）。
+7. 香港区级任务强约束：若 query 出现“香港+区级名称”（如 中西区/湾仔区/南区/油尖旺 等），
+   行政边界 inspect 必须优先使用
+   `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`。
+   不得仅使用 `USDOS/LSIB_SIMPLE/2017` 作为区级边界来源。
 
 示例（两个 asset）：
 [

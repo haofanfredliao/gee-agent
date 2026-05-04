@@ -29,6 +29,15 @@ SANDBOX_UNSAFE_PATTERNS: List[re.Pattern] = [
     re.compile(r"\bos\."),
     re.compile(r"\bsubprocess\."),
     re.compile(r"\bpathlib\."),
+    # 禁止已知错误/不可访问的香港边界幻觉资产路径
+    re.compile(r"projects/google/ft_assets/2023-08-01/HK_District_Boundaries"),
+    re.compile(r"projects/google/datasets/geo/boundaries/HK_WanChai"),
+    # 常见无效日期写法：会触发 Invalid argument specified for ee.Date(): None
+    re.compile(r"ee\.Date\(\s*None\s*\)"),
+    # Python 语法冲突：GEE Filter 组合不能用小写 and/or/not 形式
+    re.compile(r"ee\.Filter\.and\s*\("),
+    re.compile(r"ee\.Filter\.or\s*\("),
+    re.compile(r"ee\.Filter\.not\s*\("),
 ]
 
 # ---------------------------------------------------------------------------
@@ -129,4 +138,52 @@ SANDBOX_CONSTRAINTS_BLOCK = """\
     因为 SANDBOX_CONSTRAINTS_BLOCK 会被拼入 prompt 模板并走 str.format()，会把花括号误当占位符。
 29. 对 NDVI、mosaic、真彩色影像、遥感影像可视化请求，必须调用 Map.addLayer(...) 添加最终 ee.Image 图层。
     如果只 print 结果而没有 Map.addLayer，任务不算完成；NDVI 图层必须使用 NDVI 可视化参数。
+30. Python 输出统计值时，仅允许对“最终小结果对象”做物化（如 reduceRegion(...).getInfo()）。
+    禁止在循环或中间步骤频繁物化；可以一次性物化最终字典，再在 Python 侧拆字段打印。
+    禁止直接 print ee.Dictionary/ee.Number 造成 ComputedObject 占位输出。
+31. 禁止使用占位符形式的资产路径（如 `projects/reference_map_asset_path`、`projects/sample_points_asset_path`）。
+    若上下文缺少真实可读 asset ID，优先尝试同语义的文档化公共资产回退，并在输出中标注 `WARN_USING_FALLBACK_ASSET`。
+32. 若用户或上下文已明确给定资产路径（特别是行政区边界资产），应优先复用已确认路径。
+    若资产不可访问，允许切换到同语义的文档化替代资产继续执行，并在输出中标注 `WARN_ASSET_FALLBACK`。
+33. 香港区级行政区划任务中，若用户已确认
+    `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`，
+    应优先使用该路径；若 inspect/load 失败，可回退到文档化替代边界（如 `FAO/GAUL/2015/level2`）
+    或其它已验证路径，并在输出中说明边界来源变更。
+    在筛选具体区名（如中西区）前，必须先打印区名预览并再匹配：
+    - 先打印 `NAME_EN` / `NAME_TC` 的候选区名列表（建议前 20-30 个）；
+    - 再基于别名做 exact + contains 的两阶段匹配；
+    - 打印 `candidate_count`、`final_count`、`matched_names_preview`，再进入后续统计。
+    - 优先使用“多层预检模板”（见第 36 条）并保持打印键名一致，便于跨任务复用。
+34. 禁止使用 `ee.Date(None)` 作为“当前时间”占位写法。
+    Python 环境中也禁止使用 `ee.Date(Date.now())`（`Date` 是 JavaScript 全局对象，Python 不可用）。
+    需要“当前时间/最近窗口”时，优先从数据集时间戳推导（如 `aggregate_max('system:time_start')`），
+    或使用明确的日期字符串 / `ee.Date.fromYMD(...)`。
+35. 当用户明确指定区级/县级行政边界且 AOI 解析失败时，
+    优先尝试同级别边界数据源回退；仍失败时可在用户未反对的前提下使用受控近似 AOI（如小范围 bbox）
+    继续给出参考结果，并在输出中标注 `WARN_APPROX_AOI` 与不确定性说明。
+36. 行政区名称匹配必须使用“可复用多层预检”：
+    - L1 字段层：打印 `boundary_asset`、`property_names_preview`（至少包含名称字段）；
+    - L2 候选层：打印 `name_en_preview`、`name_tc_preview`（前 20-30 条）；
+    - L3 精确层：打印 `exact_match_count`、`exact_matched_names_preview`；
+    - L4 模糊层：打印 `contains_match_count`、`contains_matched_names_preview`；
+    - L5 最终层：打印 `final_count`、`final_matched_names_preview`、`aoi_source`。
+    若 `final_count==0`，输出 `WARN_APPROX_AOI` 并进入降级模式；禁止跳过上述层级直接做统计。
+37. 香港区级边界（`projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`）必须先打印完整区名清单再筛选：
+    - 必须先 inspect 字段名，并确认名称字段（优先 `NAME_TC`、`NAME_EN`）；
+    - 必须打印完整 `district_names_tc_all` 与 `district_names_en_all`（可用 `aggregate_array(...).distinct().sort()`）；
+    - 再做 exact + contains 两阶段匹配，且优先用官方全称匹配（例如 `Central and Western District`）。
+    对“中西区/中西區”目标，至少包含以下别名：
+    - 中文：`中西區`、`中西区`
+    - 英文：`Central and Western District`、`Central and Western`
+    对香港其余区名匹配，允许使用以下官方英文全称（必要时可去掉 `District` 后缀再做 contains）：
+    - `Wan Chai District`, `Eastern District`, `Southern District`, `Yau Tsim Mong District`,
+      `Sham Shui Po District`, `Kowloon City District`, `Wong Tai Sin District`, `Kwun Tong District`,
+      `Kwai Tsing District`, `Tsuen Wan District`, `Tuen Mun District`, `Yuen Long District`,
+      `North District`, `Tai Po District`, `Sha Tin District`, `Sai Kung District`, `Islands District`.
+38. 涉及多波段影像统计前，必须先打印波段诊断信息，至少包含：
+    - `band_names`（可用波段列表）
+    - `selected_band`（最终用于统计的波段）
+    先打印再进入 reduceRegion/reduceRegions，便于快速定位“波段名不匹配”问题。
+39. 结果表中的空值必须保持为空（null/None），禁止用 0 填充。
+    适用于 `mean_*`、`image_count` 等字段；仅当计算结果确实为数值 0 时才允许输出 0。
 """
