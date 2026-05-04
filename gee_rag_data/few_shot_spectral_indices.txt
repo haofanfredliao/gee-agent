@@ -1,0 +1,403 @@
+## FEW_SHOT: General Spectral Indices over AOI
+
+Intent: execution
+Task type: spectral index calculation and visualization
+Keywords: NDVI, NDBI, NDWI, MNDWI, NDMI, NBR, NBR2, EVI, SAVI, MSAVI, BSI, NDSI, GNDVI, NDRE, LAI, Sentinel-2, Landsat 8, Landsat 9, previous image, 刚刚生成, 上一张, 光谱指数
+
+User task patterns:
+- "根据刚刚生成的遥感影像计算 NDBI / NDVI / NDWI / LAI"
+- "用 Sentinel-2 给广州计算 2022 年 NDBI"
+- "用 Landsat 8 给深圳计算 NDWI"
+- "计算上一张图的 NBR"
+
+Core idea:
+先判断用户是在引用上一轮已生成影像，还是从零请求某 AOI 的某个指数。
+然后组合两个 profile：
+1) Dataset profile：数据源、云量字段、波段映射、反射率缩放。
+2) Index profile：指数公式、需要的逻辑波段、可视化参数、适用性限制。
+
+Dataset profile mapping (必须按此映射选择字段、波段与缩放):
+- COPERNICUS/S2_SR_HARMONIZED:
+    cloud_property = "CLOUDY_PIXEL_PERCENTAGE"
+    bands = {
+      "blue": "B2", "green": "B3", "red": "B4",
+      "red_edge1": "B5", "red_edge2": "B6", "red_edge3": "B7",
+      "nir": "B8", "nir_narrow": "B8A",
+      "swir1": "B11", "swir2": "B12"
+    }
+    reflectance_scale = (0.0001, 0.0)     # 指数计算统一转成 0~1 反射率；EVI/SAVI/LAI 需要常数项，不能直接用 0~10000
+    cloud_mask = "SCL"
+    native_scale = 10
+- LANDSAT/LC08/C02/T1_L2 和 LANDSAT/LC09/C02/T1_L2:
+    cloud_property = "CLOUD_COVER"
+    bands = {
+      "blue": "SR_B2", "green": "SR_B3", "red": "SR_B4",
+      "nir": "SR_B5", "swir1": "SR_B6", "swir2": "SR_B7"
+    }
+    reflectance_scale = (0.0000275, -0.2) # Landsat C2 L2 必须还原反射率，offset 会影响所有指数
+    cloud_mask = "QA_PIXEL"
+    native_scale = 30
+
+Index profile mapping (经典常用指数):
+- NDVI / vegetation:
+    formula = (NIR - RED) / (NIR + RED)
+    required = ["nir", "red"]
+    vis = {"min": -0.2, "max": 0.8, "palette": ["#8c510a", "#d8b365", "#f6e8c3", "#c7eae5", "#5ab4ac", "#01665e"]}
+- GNDVI:
+    formula = (NIR - GREEN) / (NIR + GREEN)
+    required = ["nir", "green"]
+    vis = {"min": -0.2, "max": 0.8, "palette": ["#a6611a", "#dfc27d", "#f5f5f5", "#80cdc1", "#018571"]}
+- NDBI / built-up:
+    formula = (SWIR1 - NIR) / (SWIR1 + NIR)
+    required = ["swir1", "nir"]
+    vis = {"min": -0.5, "max": 0.5, "palette": ["#2166ac", "#f7f7f7", "#b2182b"]}
+- NDWI / water (McFeeters):
+    formula = (GREEN - NIR) / (GREEN + NIR)
+    required = ["green", "nir"]
+    vis = {"min": -0.5, "max": 0.5, "palette": ["#8c510a", "#f6e8c3", "#67a9cf", "#016c9c"]}
+- MNDWI / modified water:
+    formula = (GREEN - SWIR1) / (GREEN + SWIR1)
+    required = ["green", "swir1"]
+    vis = {"min": -0.5, "max": 0.5, "palette": ["#a6611a", "#f5f5f5", "#4393c3", "#053061"]}
+- NDMI / NDWI Gao / vegetation moisture:
+    formula = (NIR - SWIR1) / (NIR + SWIR1)
+    required = ["nir", "swir1"]
+    vis = {"min": -0.6, "max": 0.6, "palette": ["#8c510a", "#f6e8c3", "#80cdc1", "#01665e"]}
+- NBR / burn severity:
+    formula = (NIR - SWIR2) / (NIR + SWIR2)
+    required = ["nir", "swir2"]
+    vis = {"min": -0.5, "max": 0.8, "palette": ["#7f0000", "#d7301f", "#fdae6b", "#ffffcc", "#1a9850"]}
+- NBR2:
+    formula = (SWIR1 - SWIR2) / (SWIR1 + SWIR2)
+    required = ["swir1", "swir2"]
+    vis = {"min": -0.5, "max": 0.5, "palette": ["#762a83", "#f7f7f7", "#1b7837"]}
+- EVI:
+    formula = 2.5 * (NIR - RED) / (NIR + 6*RED - 7.5*BLUE + 1)
+    required = ["nir", "red", "blue"]
+    vis = {"min": -0.2, "max": 1.0, "palette": ["#8c510a", "#d8b365", "#f6e8c3", "#c7eae5", "#5ab4ac", "#01665e"]}
+    note = 必须使用 0~1 反射率；不能用 S2 原始 0~10000 或 Landsat 未缩放 SR。
+- SAVI:
+    formula = 1.5 * (NIR - RED) / (NIR + RED + 0.5)
+    required = ["nir", "red"]
+    vis = {"min": -0.2, "max": 0.8, "palette": ["#8c510a", "#f6e8c3", "#7fbf7b", "#1b7837"]}
+    note = L=0.5，适合稀疏植被/裸土背景。
+- MSAVI2 / MSAVI:
+    formula = (2*NIR + 1 - sqrt((2*NIR + 1)^2 - 8*(NIR - RED))) / 2
+    required = ["nir", "red"]
+    vis = {"min": -0.2, "max": 0.8, "palette": ["#8c510a", "#f6e8c3", "#7fbf7b", "#1b7837"]}
+- BSI / bare soil index:
+    formula = ((SWIR1 + RED) - (NIR + BLUE)) / ((SWIR1 + RED) + (NIR + BLUE))
+    required = ["swir1", "red", "nir", "blue"]
+    vis = {"min": -0.5, "max": 0.5, "palette": ["#2166ac", "#f7f7f7", "#b35806"]}
+- NDSI / snow:
+    formula = (GREEN - SWIR1) / (GREEN + SWIR1)
+    required = ["green", "swir1"]
+    vis = {"min": -0.5, "max": 0.8, "palette": ["#8c510a", "#f7f7f7", "#d1e5f0", "#2166ac"]}
+    note = 与 MNDWI 公式相同，但语义是 snow；若用户说 water，优先 MNDWI/NDWI。
+- NDRE / red-edge vegetation:
+    formula = (NIR_NARROW - RED_EDGE1) / (NIR_NARROW + RED_EDGE1)
+    required = ["nir_narrow", "red_edge1"]
+    vis = {"min": -0.2, "max": 0.6, "palette": ["#8c510a", "#f6e8c3", "#80cdc1", "#01665e"]}
+    note = Sentinel-2 only；Landsat 8/9 没有 red-edge 波段，不能硬算。
+- CI_RE / RECI / chlorophyll index red-edge:
+    formula = (NIR_NARROW / RED_EDGE1) - 1
+    required = ["nir_narrow", "red_edge1"]
+    vis = {"min": 0, "max": 5, "palette": ["#f7fcf5", "#74c476", "#00441b"]}
+    note = Sentinel-2 only。
+- LAI / leaf area index:
+    preferred_product = MODIS/061/MCD15A3H Lai_500m when user asks for LAI product / long time series / coarse monitoring.
+    empirical_from_optical = LAI = 3.618 * EVI - 0.118, then clamp to [0, 8]
+    required = ["nir", "red", "blue"] via EVI
+    vis = {"min": 0, "max": 6, "palette": ["#ffffe5", "#c7e9b4", "#41ab5d", "#006837"]}
+    note = LAI is a biophysical variable, not a pure normalized spectral index. If using Sentinel/Landsat empirical LAI, print that it is an empirical approximation, not a validated LAI product.
+
+Critical rules (must follow):
+1) 只有用户明确要求某个指数时才使用本模板；普通真彩色 / mosaic 任务严禁额外添加指数图层。
+2) Observe 用户是否在引用上一轮影像：
+   - query 含 "刚刚/刚才/这个/这张/上一张/根据刚刚生成/previous image/last image" -> 优先使用 context 中的 last_gee_product。
+   - 若上一轮输出有 Dataset / Selected date / Image IDs -> Case A：重建上一轮同一张 mosaic 后计算指数。
+   - 若没有上一轮产品 -> Case B：从 query 识别数据源、AOI、时间，重新生成 composite。
+3) 从 query 识别 index_key：
+   - 优先识别显式缩写：NDVI, NDBI, NDWI, MNDWI, NDMI, NBR, NBR2, EVI, SAVI, MSAVI, BSI, NDSI, GNDVI, NDRE, LAI。
+   - 若用户只说“水体指数”且未给缩写，默认 NDWI；若说“改进水体指数”，用 MNDWI。
+   - 若用户说“建筑/建成区指数”，用 NDBI。
+   - 若用户说“火烧/烧毁/火灾”，用 NBR。
+   - 若用户说“裸土”，用 BSI。
+4) 从 query 识别数据源：
+   - "Sentinel-2/S2/哨兵2" -> COPERNICUS/S2_SR_HARMONIZED
+   - "Landsat 8/L8" -> LANDSAT/LC08/C02/T1_L2
+   - "Landsat 9/L9" -> LANDSAT/LC09/C02/T1_L2
+   - 未指定数据源且上一轮产品不可复用时，默认 COPERNICUS/S2_SR_HARMONIZED。
+5) AOI 必须使用后端已解析并缓存的真实边界：
+   `aoi_fc = load_aoi_boundary()`，`aoi = aoi_fc.geometry()`。
+   不要在生成代码中请求 OSM/Nominatim/Overpass 网络 API。
+6) fresh_composite 候选集必须 bounded：`.sort(cloud_property).limit(30)`；不要对全年全集做像素级 reduceRegion。
+7) 所有指数计算前统一把所需波段转换为 0~1 反射率：
+   - S2: multiply(0.0001).add(0)
+   - Landsat C2 L2: multiply(0.0000275).add(-0.2)
+8) 若指数需要 red-edge 波段，而数据源是 Landsat，必须返回清晰错误或换 Sentinel-2；严禁编造 red-edge 波段。
+9) 指数可视化必须使用 index profile 的 vis；严禁使用真彩色 bands / min=0 max=3000 / min=0 max=0.3 渲染指数。
+10) 必须调用 `Map.addLayer(index_image, index_vis, ...)`，否则前端收不到图层，任务不算完成。
+11) 不要对 ee.Image 调用 `.reproject()` 或 `.setDefaultProjection()`。
+12) 必须 print（汇总阶段要用）:
+   - "Index: <index_key>"
+   - "Index mode: previous_product" 或 "Index mode: fresh_composite"
+   - "Dataset: <collection_id>"
+   - "Source image IDs: [...]"（previous_product）
+   - "Selected date: YYYY-MM-DD"（若有）
+   - "Candidate count: N"（fresh_composite）
+   - "Boundary source: ..."
+   - "Boundary names: [...]"
+   - LAI empirical approximation 时必须 print "LAI note: empirical approximation from EVI"
+
+Positive ReAct trajectory:
+- Observe:
+  - 识别是否引用上一轮影像；若是，读取 last_gee_product 的 Dataset / Image IDs / Selected date。
+  - 识别 index_key -> 查 Index profile。
+  - 识别数据源 -> 查 Dataset profile。
+  - 识别 AOI：使用 `load_aoi_boundary()`；不要写死香港/广州/深圳。
+  - 识别时间：年份 "2022" -> "2022-01-01" ~ "2023-01-01"。
+- Think:
+  - Case A previous_product：用上一轮 Image IDs / Selected date 重建 mosaic，保证指数和上一张影像同源。
+  - Case B fresh_composite：filterBounds + filterDate + sort(cloud_property) + limit(30)，再云掩膜和 median composite。
+  - 用 Dataset profile 的 bands + Index profile 的 formula 组合计算。
+- Act:
+  - `.clipToCollection(aoi_fc)` 后计算指数。
+  - `Map.addLayer(index_image, index_vis, "...")`。
+  - print 模式、指数名、数据源、候选数量或上一轮 image IDs、边界信息。
+
+Reference Python snippet A (基于上一轮已生成影像；把 Dataset/Image IDs 从上下文或上一轮输出填入):
+```python
+import ee
+
+# 从 last_gee_product / previous output 中读取；不要凭空编造。
+collection_id = "COPERNICUS/S2_SR_HARMONIZED"
+index_key = "NDBI"  # e.g. NDVI / NDBI / NDWI / MNDWI / NDMI / NBR / EVI / SAVI / BSI / LAI
+source_image_ids = [
+    # e.g. "20220409T025551_20220409T030902_T49QGF"
+]
+selected_date = ""  # e.g. "2022-04-09"; 若 source_image_ids 为空才使用日期 fallback
+
+def get_dataset_profile(cid):
+    if cid == "COPERNICUS/S2_SR_HARMONIZED":
+        return {
+            "cloud_property": "CLOUDY_PIXEL_PERCENTAGE",
+            "bands": {"blue": "B2", "green": "B3", "red": "B4", "red_edge1": "B5",
+                      "nir": "B8", "nir_narrow": "B8A", "swir1": "B11", "swir2": "B12"},
+            "reflectance_scale": (0.0001, 0.0),
+        }
+    if cid in ("LANDSAT/LC08/C02/T1_L2", "LANDSAT/LC09/C02/T1_L2"):
+        return {
+            "cloud_property": "CLOUD_COVER",
+            "bands": {"blue": "SR_B2", "green": "SR_B3", "red": "SR_B4",
+                      "nir": "SR_B5", "swir1": "SR_B6", "swir2": "SR_B7"},
+            "reflectance_scale": (0.0000275, -0.2),
+        }
+    raise ValueError("Unsupported collection for spectral indices: " + cid)
+
+def get_index_vis(key):
+    key = key.upper()
+    palettes = {
+        "NDVI": {"min": -0.2, "max": 0.8, "palette": ["#8c510a", "#d8b365", "#f6e8c3", "#c7eae5", "#5ab4ac", "#01665e"]},
+        "NDBI": {"min": -0.5, "max": 0.5, "palette": ["#2166ac", "#f7f7f7", "#b2182b"]},
+        "NDWI": {"min": -0.5, "max": 0.5, "palette": ["#8c510a", "#f6e8c3", "#67a9cf", "#016c9c"]},
+        "MNDWI": {"min": -0.5, "max": 0.5, "palette": ["#a6611a", "#f5f5f5", "#4393c3", "#053061"]},
+        "NDMI": {"min": -0.6, "max": 0.6, "palette": ["#8c510a", "#f6e8c3", "#80cdc1", "#01665e"]},
+        "NBR": {"min": -0.5, "max": 0.8, "palette": ["#7f0000", "#d7301f", "#fdae6b", "#ffffcc", "#1a9850"]},
+        "EVI": {"min": -0.2, "max": 1.0, "palette": ["#8c510a", "#d8b365", "#f6e8c3", "#c7eae5", "#5ab4ac", "#01665e"]},
+        "SAVI": {"min": -0.2, "max": 0.8, "palette": ["#8c510a", "#f6e8c3", "#7fbf7b", "#1b7837"]},
+        "BSI": {"min": -0.5, "max": 0.5, "palette": ["#2166ac", "#f7f7f7", "#b35806"]},
+        "LAI": {"min": 0, "max": 6, "palette": ["#ffffe5", "#c7e9b4", "#41ab5d", "#006837"]},
+    }
+    return palettes.get(key, {"min": -0.5, "max": 0.5, "palette": ["#313695", "#ffffbf", "#a50026"]})
+
+def scaled_reflectance(image, profile):
+    bands = profile["bands"]
+    keys = list(bands.keys())
+    gee_bands = [bands[k] for k in keys]
+    scale, offset = profile["reflectance_scale"]
+    return image.select(gee_bands).multiply(scale).add(offset).rename(keys)
+
+def compute_index(image, profile, key):
+    key = key.upper()
+    r = scaled_reflectance(image, profile)
+    if key == "NDVI":
+        out = r.normalizedDifference(["nir", "red"])
+    elif key == "GNDVI":
+        out = r.normalizedDifference(["nir", "green"])
+    elif key == "NDBI":
+        out = r.normalizedDifference(["swir1", "nir"])
+    elif key == "NDWI":
+        out = r.normalizedDifference(["green", "nir"])
+    elif key in ("MNDWI", "NDSI"):
+        out = r.normalizedDifference(["green", "swir1"])
+    elif key in ("NDMI", "NDWI_GAO"):
+        out = r.normalizedDifference(["nir", "swir1"])
+    elif key == "NBR":
+        out = r.normalizedDifference(["nir", "swir2"])
+    elif key == "NBR2":
+        out = r.normalizedDifference(["swir1", "swir2"])
+    elif key == "EVI":
+        out = r.expression("2.5 * ((nir - red) / (nir + 6 * red - 7.5 * blue + 1))",
+                           {"nir": r.select("nir"), "red": r.select("red"), "blue": r.select("blue")})
+    elif key == "SAVI":
+        out = r.expression("1.5 * ((nir - red) / (nir + red + 0.5))",
+                           {"nir": r.select("nir"), "red": r.select("red")})
+    elif key in ("MSAVI", "MSAVI2"):
+        out = r.expression("(2 * nir + 1 - sqrt(pow((2 * nir + 1), 2) - 8 * (nir - red))) / 2",
+                           {"nir": r.select("nir"), "red": r.select("red")})
+    elif key == "BSI":
+        out = r.expression("((swir1 + red) - (nir + blue)) / ((swir1 + red) + (nir + blue))",
+                           {"swir1": r.select("swir1"), "red": r.select("red"), "nir": r.select("nir"), "blue": r.select("blue")})
+    elif key == "NDRE":
+        if "red_edge1" not in profile["bands"] or "nir_narrow" not in profile["bands"]:
+            raise ValueError("NDRE requires Sentinel-2 red-edge bands; Landsat 8/9 does not support NDRE.")
+        out = r.normalizedDifference(["nir_narrow", "red_edge1"])
+    elif key in ("RECI", "CI_RE"):
+        if "red_edge1" not in profile["bands"] or "nir_narrow" not in profile["bands"]:
+            raise ValueError("RECI requires Sentinel-2 red-edge bands; Landsat 8/9 does not support RECI.")
+        out = r.expression("(nir / red_edge1) - 1", {"nir": r.select("nir_narrow"), "red_edge1": r.select("red_edge1")})
+    elif key == "LAI":
+        evi = r.expression("2.5 * ((nir - red) / (nir + 6 * red - 7.5 * blue + 1))",
+                           {"nir": r.select("nir"), "red": r.select("red"), "blue": r.select("blue")})
+        out = evi.multiply(3.618).subtract(0.118).clamp(0, 8)
+    else:
+        raise ValueError("Unsupported spectral index: " + key)
+    return out.rename(key).clamp(-1, 1) if key != "LAI" else out.rename("LAI")
+
+aoi_fc = load_aoi_boundary()
+boundary_source = "Cached OpenStreetMap boundary via load_aoi_boundary()"
+aoi = aoi_fc.geometry()
+profile = get_dataset_profile(collection_id)
+
+base = ee.ImageCollection(collection_id).filterBounds(aoi)
+if source_image_ids:
+    source_col = base.filter(ee.Filter.inList("system:index", source_image_ids))
+elif selected_date:
+    d = ee.Date(selected_date)
+    source_col = base.filterDate(d, d.advance(1, "day")).sort(profile["cloud_property"]).limit(30)
+else:
+    raise ValueError("Previous product metadata is missing Dataset/Image IDs/Selected date; use fresh_composite mode.")
+
+mosaic = source_col.mosaic().clipToCollection(aoi_fc)
+index_image = compute_index(mosaic, profile, index_key)
+
+print("Index:", index_key)
+print("Index mode: previous_product")
+print("Dataset:", collection_id)
+print("Source image IDs:", source_image_ids)
+print("Selected date:", selected_date)
+print("Boundary source:", boundary_source)
+print("Boundary names:", aoi_fc.aggregate_array("display_name").distinct().getInfo())
+if index_key.upper() == "LAI":
+    print("LAI note: empirical approximation from EVI")
+
+Map.addLayer(index_image, get_index_vis(index_key), collection_id.split("/")[-1] + " " + index_key)
+```
+
+Reference Python snippet B (没有上一轮影像可复用；从 query 重新生成 index composite):
+```python
+import ee
+
+# ---- 从 query 中填入 ----
+collection_id = "COPERNICUS/S2_SR_HARMONIZED"  # 或 LANDSAT/LC08/C02/T1_L2 / LANDSAT/LC09/C02/T1_L2
+index_key = "NDVI"
+start = "2022-01-01"
+end = "2023-01-01"
+CANDIDATE_LIMIT = 30
+# -----------------------
+
+# 复用 snippet A 中的 get_dataset_profile / get_index_vis / scaled_reflectance / compute_index
+# 此处省略重复定义；实际生成代码必须包含这些函数的完整定义。
+
+def mask_image(img, profile):
+    if collection_id == "COPERNICUS/S2_SR_HARMONIZED":
+        scl = img.select("SCL")
+        clear = (scl.neq(3)
+                 .And(scl.neq(8))
+                 .And(scl.neq(9))
+                 .And(scl.neq(10))
+                 .And(scl.neq(11)))
+        return img.updateMask(clear)
+    qa = img.select("QA_PIXEL")
+    clear = (qa.bitwiseAnd(1 << 0).eq(0)
+             .And(qa.bitwiseAnd(1 << 1).eq(0))
+             .And(qa.bitwiseAnd(1 << 2).eq(0))
+             .And(qa.bitwiseAnd(1 << 3).eq(0))
+             .And(qa.bitwiseAnd(1 << 4).eq(0))
+             .And(qa.bitwiseAnd(1 << 5).eq(0)))
+    return img.updateMask(clear)
+
+profile = get_dataset_profile(collection_id)
+cloud_prop = profile["cloud_property"]
+
+aoi_fc = load_aoi_boundary()
+boundary_source = "Cached OpenStreetMap boundary via load_aoi_boundary()"
+aoi = aoi_fc.geometry()
+
+candidates = (ee.ImageCollection(collection_id)
+              .filterBounds(aoi)
+              .filterDate(start, end)
+              .sort(cloud_prop)
+              .limit(CANDIDATE_LIMIT)
+              .map(lambda img: mask_image(img, profile)))
+
+composite = candidates.median().clipToCollection(aoi_fc)
+index_image = compute_index(composite, profile, index_key)
+
+print("Index:", index_key)
+print("Index mode: fresh_composite")
+print("Dataset:", collection_id)
+print("Candidate count:", candidates.size().getInfo())
+print("Boundary source:", boundary_source)
+print("Boundary names:", aoi_fc.aggregate_array("display_name").distinct().getInfo())
+if index_key.upper() == "LAI":
+    print("LAI note: empirical approximation from EVI")
+
+Map.addLayer(index_image, get_index_vis(index_key), collection_id.split("/")[-1] + " " + index_key)
+```
+
+MODIS LAI product route (only when user explicitly asks for LAI product / coarse LAI time series):
+```python
+import ee
+
+start = "2022-01-01"
+end = "2023-01-01"
+aoi_fc = load_aoi_boundary()
+aoi = aoi_fc.geometry()
+
+lai = (ee.ImageCollection("MODIS/061/MCD15A3H")
+       .filterBounds(aoi)
+       .filterDate(start, end)
+       .select("Lai_500m")
+       .mean()
+       .multiply(0.1)
+       .rename("LAI")
+       .clipToCollection(aoi_fc))
+
+print("Index: LAI")
+print("Index mode: MODIS_LAI_product")
+print("Dataset: MODIS/061/MCD15A3H")
+print("LAI note: MODIS LAI product, 500m, scale factor 0.1")
+print("Boundary names:", aoi_fc.aggregate_array("display_name").distinct().getInfo())
+
+Map.addLayer(lai, {"min": 0, "max": 6, "palette": ["#ffffe5", "#c7e9b4", "#41ab5d", "#006837"]}, "MODIS LAI")
+```
+
+Anti-patterns to avoid:
+- 用户说“根据刚刚/这张/上一张”时，把“刚刚生成的遥感影像”当作 AOI 去查 Nominatim。
+- 上一轮产品存在时，重新随机选一批影像，导致指数和上一张真彩色图不是同一数据来源。
+- Landsat C2 L2 不做 reflectance_scale 就直接计算指数。
+- EVI/SAVI/LAI 用 S2 原始 0~10000 值计算，导致常数项错误。
+- NDWI 语义混淆：水体 NDWI 默认 Green/NIR；植被水分应叫 NDMI 或 NDWI Gao。
+- Landsat 上硬算 NDRE/RECI。
+- 指数图层使用真彩色 bands / min=0 max=3000 / min=0 max=0.3。
+- 只 print 指数结果但不 Map.addLayer。
+- 生成代码中请求 OSM/Nominatim/Overpass 网络 API。
+- 对 ee.Image 强制 `.reproject()` / `.setDefaultProjection()`。
+
+Expected behavior:
+- 若用户引用上一轮影像，指数使用上一轮 Dataset/Image IDs/Selected date 重建并计算。
+- 若用户从零请求指数，按 query 数据源、指数、时间和 AOI 生成 bounded composite 后计算。
+- 地图出现一个指数图层，颜色范围来自 index profile。
+- 回复说明 Index、Index mode、Dataset、边界来源、候选数量或上一轮 image IDs。

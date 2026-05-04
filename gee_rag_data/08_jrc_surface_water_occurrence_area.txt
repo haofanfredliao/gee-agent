@@ -1,0 +1,146 @@
+## FEW_SHOT: JRC Surface Water Occurrence Area Summary
+
+Status: completed
+Priority: P1
+Category: case_study
+Confidence: high
+Validation stage: passed
+
+Intent: execution
+Task type: data exploration
+Keywords: JRC, Global Surface Water, occurrence, water extent, threshold, area
+
+User task pattern:
+"Use JRC Global Surface Water to estimate the area of persistent water in my AOI."
+
+Assets in this case:
+- JRC/GSW1_4/GlobalSurfaceWater
+- user provided AOI
+
+Auto-AOI strategy (when user does not specify range):
+- place name -> OSM or admin boundary resolve (default example place: Hong Kong)
+- fallback to current map context small AOI
+- if both unavailable, ask user for place name or AOI
+
+AOI consistency template (global, reusable):
+- preferred AOI source order:
+  1) user-provided geometry or asset ID
+  2) for Hong Kong district-level requests: `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`
+  3) OSM/Nominatim place boundary resolve (default example place: Hong Kong)
+  4) FAO/GAUL/2015/level2 (or equivalent accessible admin boundary)
+  5) current map context small AOI
+- do not depend on private or unverified assets unless access is confirmed.
+- when user explicitly confirms `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, treat it as verified primary source for Hong Kong district tasks.
+- if AOI resolution fails, first try documented fallback boundaries; if still unresolved, continue with a controlled approximate AOI and ask for clarification.
+  Do not return 0-area results as valid outputs when AOI is unresolved.
+  If diagnostics show final_count==0 or empty geometry, print `WARN_APPROX_AOI` and continue in degraded mode using controlled approximate AOI, and clearly report uncertainty.
+  Never coerce null/None statistics to 0 when AOI is unresolved.
+- in follow-up turns, keep prior AOI and method unless the user explicitly asks to change them.
+
+Boundary and AOI robustness guardrails:
+- Always keep and print `aoi_source` and `boundary_asset` metadata in execution outputs.
+- For admin-boundary lookup, use exact field match first, then controlled `stringContains` fallback in the same boundary dataset.
+- If boundary match count is 0, do not silently switch to unrelated boundary datasets; ask user or use documented fallback only.
+- Never replace the user-requested place/admin target with another district name; require explicit user confirmation before switching target.
+- If reduction output key is missing/null, retry once with a small buffered AOI and tag the metric source.
+- Never coerce missing statistics to 0; keep null/None and explain why.
+- Always print AOI diagnostics (`candidate_count`, `final_count`, and period `image_count`) before final summary.
+- For `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, preview both `NAME_EN` and `NAME_TC` before filtering.
+- For Hong Kong district-level matching, use alias-safe filters on real fields (English + Chinese aliases) instead of a single hardcoded district string.
+
+Critical rules (must follow):
+1) Before AOI selection, print boundary candidate names/counts with real fields, then do exact match and controlled fallback in the same dataset.
+2) For Hong Kong-like city-level requests on `FAO/GAUL/2015/level2`, do not use `ADM2_NAME == 'Hong Kong'` as the final selector.
+   Use `ADM0_NAME + ADM1_NAME` (or validated district-level ADM2) and verify `final_count > 0` before geometry extraction.
+3) Explain what the threshold means in terms of persistence.
+4) Report area statistics, not just a masked image.
+5) If AOI boundary lookup fails, stop and ask for clarification or alternate AOI source.
+   - Do not return 0 area as if it were a valid result when AOI is unresolved.
+6) In follow-up turns, keep the prior AOI and method unless the user explicitly asks to change them.
+7) Do not use `bestEffort=True`; use appropriate scale/maxPixels and explicit null checks.
+8) For threshold sensitivity requests, output at least three thresholds in the same AOI (for example 90/75/50) and report whether area changes materially.
+
+Do-Not Rules (strictly prohibited):
+1) If AOI preflight fails, switch to degraded-mode area computation with a controlled approximate AOI.
+   If `final_count==0` or AOI geometry is empty, output `WARN_APPROX_AOI`, continue, and include uncertainty notes.
+2) Do not use `ADM2_NAME='Hong Kong'` as the final selector on `FAO/GAUL/2015/level2`.
+   For Hong Kong-wide requests, prefer validated `ADM0_NAME + ADM1_NAME` logic or verified district-level ADM2 names.
+3) Do not silently switch AOI source, district name, or country context between steps/turns.
+   Any AOI source change must be explicit and user-confirmed.
+4) Do not use unverified private assets (for example `projects/...`) as fallback boundary sources
+   unless the user explicitly provides the asset and confirms access.
+5) Do not use `bestEffort=True` to bypass computation issues.
+   Fix AOI/data validity first, then use explicit `scale` + `maxPixels`.
+6) Do not treat missing or null area statistics as 0.
+   Keep null/None with diagnostic reason and metric source.
+7) Do not output “all thresholds are 0.00 km2” as a final conclusion without AOI and key-validity diagnostics.
+   Must include `aoi_source`, `boundary_asset`, `candidate_count`, `final_count`, and key existence check status.
+8) Do not perform sensitivity comparison on different AOIs.
+   All thresholds must be evaluated on the same resolved AOI.
+9) Do not skip threshold semantics.
+   Must state that occurrence threshold is persistence frequency (%), not seasonality/transition class.
+10) Do not execute additional unrelated diagnostics (other datasets/tasks) after this task is blocked.
+    Keep response focused on unblock requirements for the current water-occurrence task only.
+
+Latency-first options:
+- Scope: static occurrence layer over compact AOI
+- Output shape: threshold_percent, persistent_water_area_km2
+- Degrade path: area + threshold note -> area only
+- Note: do NOT remove AOI by default; large/global region is usually slower.
+- Note: "no manual range" should mean "auto-derived small AOI", not global computation.
+
+Minimal runnable path:
+- Load occurrence band and apply explicit threshold.
+- Build persistent-water mask.
+- Summarize mask area over AOI.
+- For sensitivity mode, repeat area summary across multiple thresholds in the same AOI and compare deltas.
+
+Positive ReAct trajectory:
+- Observe:
+  - confirm AOI and occurrence threshold
+  - confirm persistence interpretation
+- Think:
+  - define persistent-water mask from occurrence
+  - choose area unit for output
+- Act:
+  - load occurrence layer
+  - threshold to generate persistent-water mask
+  - summarize water area over AOI
+
+Reference JavaScript snippet (GEE Code Editor):
+```javascript
+var aoi = ee.Geometry.Rectangle([113.95, 22.28, 114.05, 22.38]); // replace if available
+var gsw = ee.Image('JRC/GSW1_4/GlobalSurfaceWater');
+var occurrence = gsw.select('occurrence');
+
+var threshold = 75; // persistent water threshold (%)
+var persistent = occurrence.gte(threshold);
+
+var areaM2 = persistent.selfMask().multiply(ee.Image.pixelArea()).reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: aoi,
+  scale: 30,
+  maxPixels: 1e13
+}).get('occurrence');
+
+print('threshold_percent', threshold);
+print('persistent_water_area_km2', ee.Number(areaM2).divide(1e6));
+```
+
+Anti-patterns to avoid:
+- Not stating the threshold used for persistence.
+- Confusing occurrence with seasonality or transitions bands.
+- Switching AOI data source silently between turns.
+- Returning 0 km2 due to AOI load failure without explicit failure notice.
+
+Expected behavior for this pattern:
+- Script executes successfully in GEE and prints threshold_percent = 75.
+- persistent_water_area_km2 remains close to the baseline (~62.47 km2), allowing small numeric variation (for example, within +/-1%).
+- In sensitivity mode, outputs a threshold->area table and a short interpretation (stable vs sensitive).
+
+Failure modes:
+- Using `ADM2_NAME='Hong Kong'` on level2 and getting empty/incorrect AOI.
+- Returning all-zero areas because AOI was unresolved or null key handling was skipped.
+- Using `bestEffort=True` to hide computation issues instead of fixing AOI/data checks.
+
+===

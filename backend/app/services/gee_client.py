@@ -16,7 +16,7 @@ from backend.app.core.config import (
     DEFAULT_ZOOM,
     GEE_PROJECT_ID,
 )
-
+#test
 _gee_initialized = False
 
 

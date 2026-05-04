@@ -1,0 +1,211 @@
+## DRAFT: VIIRS Nighttime Lights Change Summary
+
+Status: draft
+Priority: P2
+Category: case_study
+Confidence: medium
+Validation stage: not_started
+
+Why this candidate:
+- 夜间灯光变化是很直观的 case study，适合讲经济活动或城市活跃度变化。
+- 可输出前后期均值差异，不需要交互地图。
+
+Suggested source:
+- VIIRS nightlights examples
+- urban activity and economic proxy examples
+
+## FEW_SHOT: VIIRS Nighttime Lights Change Summary
+
+Intent: execution
+Task type: data exploration
+Keywords: VIIRS, nightlights, change, monthly composite, before after, urban activity
+
+User task pattern:
+"Use VIIRS monthly nightlights to compare brightness changes over my AOI between two periods."
+
+Public datasets in this case:
+- NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG
+
+Optional boundary or AOI source:
+- user provided AOI
+
+Auto-AOI strategy (when user does not specify range):
+- place name -> OSM or admin boundary resolve (default example place: Hong Kong)
+- fallback to current map context small AOI
+- if both unavailable, ask user for place name or AOI
+
+AOI consistency template (global, reusable):
+- preferred AOI source order:
+  1) user-provided geometry or asset ID
+  2) for Hong Kong district-level requests: `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`
+  3) OSM/Nominatim place boundary resolve (default example place: Hong Kong)
+  4) FAO/GAUL/2015/level2 (or equivalent accessible admin boundary)
+  5) current map context small AOI
+- do not depend on private or unverified assets unless access is confirmed.
+- when user explicitly confirms `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, treat it as verified primary source for Hong Kong district tasks.
+- if AOI resolution fails, first try documented fallback boundaries; if still unresolved, continue with a controlled approximate AOI and ask for clarification.
+  Do not return 0-area results as valid outputs when AOI is unresolved.
+  If diagnostics show final_count==0 or empty geometry, print `WARN_APPROX_AOI` and continue in degraded mode using controlled approximate AOI, and clearly report uncertainty.
+  Never coerce null/None statistics to 0 when AOI is unresolved.
+- in follow-up turns, keep prior AOI and method unless the user explicitly asks to change them.
+
+Boundary and AOI robustness guardrails:
+- Always keep and print `aoi_source` and `boundary_asset` metadata in execution outputs.
+- For admin-boundary lookup, use exact field match first, then controlled `stringContains` fallback in the same boundary dataset.
+- If boundary match count is 0, do not silently switch to unrelated boundary datasets; ask user or use documented fallback only.
+- Never replace the user-requested place/admin target with another district name; require explicit user confirmation before switching target.
+- If reduction output key is missing/null, retry once with a small buffered AOI and tag the metric source.
+- Never coerce missing statistics to 0; keep null/None and explain why.
+- Always print AOI diagnostics (`candidate_count`, `final_count`, and period `image_count`) before final summary.
+- For `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, preview both `NAME_EN` and `NAME_TC` before filtering.
+- For Hong Kong district-level matching, use alias-safe filters on real fields (English + Chinese aliases) instead of a single hardcoded district string.
+- Wan Chai district alias examples (use `ee.Filter.inList` on real fields after preview):
+  - `NAME_EN`: `Wan Chai`, `Wan Chai District`, `WanChai` (and variants with `&` if present in preview)
+  - `NAME_TC`: `灣仔`, `灣仔區`, `湾仔`, `湾仔区` (match whatever appears in `name_tc_preview`)
+
+Boundary preflight (required when user gives admin place names):
+- For Hong Kong district names (中西区、湾仔区等), use `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary` and real fields `NAME_EN`, `NAME_TC`, `AREA_CODE`.
+- Print `candidate_count`, `name_en_preview`, `name_tc_preview` (or `aggregate_array` samples) before any filter.
+- Apply `ee.Filter.inList('NAME_EN', ...)` combined with `ee.Filter.inList('NAME_TC', ...)` via `ee.Filter.Or` for alias-safe matching.
+- For GAUL-only workflows (non-HK-district), use `ADM0_NAME`, `ADM1_NAME`, `ADM2_NAME` with the same preview-then-match pattern.
+- Never call `.first().geometry()` directly on an unchecked filter result; check `.size()` first.
+- If exact and fallback both fail, print `WARN_APPROX_AOI` and continue with controlled approximate AOI before `clip`/`reduceRegion`, with uncertainty explicitly reported.
+
+Execution order contract (must follow):
+1) inspect image dataset metadata (`NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG`)
+2) inspect boundary dataset metadata (`projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary` for HK districts; else `FAO/GAUL/2015/level2` or user-confirmed asset)
+3) execute boundary preflight (preview `NAME_EN`/`NAME_TC` + alias `inList` match + `final_count`)
+4) execute two-window statistics only when AOI preflight passes
+
+Boundary asset guidance:
+- Hong Kong district tasks: primary boundary is `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary` after user/project confirmation.
+- Global or non-HK admin tasks: `FAO/GAUL/2015/level2` is a common public fallback when HK district asset is not applicable.
+- Do not use uninspected private boundary assets unless the user explicitly provides and confirms access.
+- If boundary inspect/load fails for the selected asset, output `BLOCKED_MISSING_BOUNDARY_ASSET` and stop; do not continue to AOI or window statistics.
+
+Critical rules (must follow):
+1) Before AOI selection, print boundary candidate names/counts with real fields, then do exact match and controlled fallback in the same dataset.
+2) AOI-first hard gate: if diagnostics show `final_count==0` or empty geometry, output `WARN_APPROX_AOI` and continue the workflow in degraded mode with uncertainty annotation.
+3) Compare clearly defined time windows such as before vs after.
+4) Use the correct radiance band and report the unit if available.
+5) Return summary differences, not only image layers.
+6) For low-latency mode, keep to two short windows and output only `period_a_mean`, `period_b_mean`, `delta`.
+7) Do not use `bestEffort=True`; keep scale aligned with VIIRS practice (about 500 m) and raise `maxPixels` when needed.
+8) Before fixing endDate, inspect collection availability and cap to the latest complete period available in the dataset.
+9) Cross-language safe logic is mandatory: never use Python native boolean operators (`not`, `and`, `or`, `!=`) on deferred `ee.*` objects.
+10) In Python outputs, never call `.Not()` on `ee.ComputedObject`; use `ee.Algorithms.If` and server-side comparisons.
+11) For both windows, compute `image_count` first and gate reductions by server-side conditions; if any window has no data, keep metrics null and stop delta derivation.
+12) Boundary asset lock: when GAUL is used, the path must be exactly `FAO/GAUL/2015/level2`; do not rewrite as unrelated `projects/...` aliases.
+    When Hong Kong district boundary is confirmed, keep `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary` exactly; do not substitute hallucinated paths.
+13) Never filter Wan Chai with only `ee.Filter.eq('NAME_EN', 'Wan Chai')` without preview; dataset values may be `Wan Chai District` or Chinese `灣仔區` only.
+14) For this summary task, keep execution non-interactive: do not call `Map.addLayer`, do not paint vectors, and do not include visualization-only branches.
+15) If the user asks specific years (e.g., 2020 vs 2022), use full-year windows:
+    - period A: `YYYY-01-01` to `(YYYY+1)-01-01` (end-exclusive)
+    - period B: same rule for the comparison year
+    Do not silently switch to seasonal windows unless the user explicitly asks.
+
+Latency-first options:
+- Scope: two short windows (before/after) first
+- Output shape: period_a_mean, period_b_mean, delta
+- Degrade path: full window stats -> mean delta only
+- Note: do NOT remove AOI by default; large/global region is usually slower.
+- Note: "no manual range" should mean "auto-derived small AOI", not global computation.
+
+Minimal runnable path:
+- Inspect and print boundary candidate names/counts, then resolve AOI.
+- Filter VIIRS monthly composites for two time windows.
+- Reduce each window to a representative image.
+- Compute AOI mean brightness for each period and the difference.
+- Keep all branch logic server-side compatible for both JavaScript and Python backends.
+
+Cross-language robustness (generalization guardrails):
+- JavaScript-style boolean chains should not be copied directly into Python for deferred `ee` objects.
+- Python generators should follow: compute window counts/flags server-side -> branch with `ee.Algorithms.If` -> avoid native Python boolean evaluation.
+- If backend reports `AttributeError: 'ComputedObject' object has no attribute 'Not'`, treat as a hard rule violation and regenerate with explicit server-side branching.
+
+Reference JavaScript snippet (GEE Code Editor):
+```javascript
+var aoi = ee.Geometry.Rectangle([113.95, 22.28, 114.05, 22.38]); // replace if available
+var beforeStart = '2020-01-01';
+var beforeEnd = '2021-01-01';
+var afterStart = '2022-01-01';
+var afterEnd = '2023-01-01';
+
+var viirs = ee.ImageCollection('NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG')
+  .filterBounds(aoi)
+  .select('avg_rad');
+print('band_names', viirs.first().bandNames());
+print('selected_band', 'avg_rad');
+
+var beforeImg = viirs.filterDate(beforeStart, beforeEnd).mean().rename('avg_rad');
+var afterImg = viirs.filterDate(afterStart, afterEnd).mean().rename('avg_rad');
+
+var beforeMean = beforeImg.reduceRegion({
+  reducer: ee.Reducer.mean(),
+  geometry: aoi,
+  scale: 500,
+  maxPixels: 1e13
+}).get('avg_rad');
+
+var afterMean = afterImg.reduceRegion({
+  reducer: ee.Reducer.mean(),
+  geometry: aoi,
+  scale: 500,
+  maxPixels: 1e13
+}).get('avg_rad');
+
+var delta = ee.Number(afterMean).subtract(ee.Number(beforeMean));
+
+print('period_a_mean', beforeMean);
+print('period_b_mean', afterMean);
+print('delta', delta);
+```
+
+Reference Python snippet (Hong Kong Wan Chai, alias-safe AOI — earthengine-api):
+```python
+boundary_asset = 'projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary'
+districts = ee.FeatureCollection(boundary_asset)
+print('boundary_asset', boundary_asset)
+print('candidate_count', districts.size().getInfo())
+print('name_en_preview', districts.aggregate_array('NAME_EN').getInfo())
+print('name_tc_preview', districts.aggregate_array('NAME_TC').getInfo())
+
+wan_chai_en = ee.List(['Wan Chai', 'Wan Chai District', 'WanChai'])
+wan_chai_tc = ee.List(['灣仔', '灣仔區', '湾仔', '湾仔区'])
+wan_chai = districts.filter(
+    ee.Filter.Or(
+        ee.Filter.inList('NAME_EN', wan_chai_en),
+        ee.Filter.inList('NAME_TC', wan_chai_tc)
+    )
+)
+print('final_count', wan_chai.size().getInfo())
+if wan_chai.size().getInfo() == 0:
+    print('WARN_APPROX_AOI')
+else:
+    aoi = wan_chai.geometry()
+    # ... then VIIRS two-window mean + reduceRegion on aoi, scale=500, no bestEffort
+```
+
+Expected output:
+- Period A mean, Period B mean, and difference summary
+- Required diagnostics: `aoi_source`, `boundary_asset`, `candidate_count`, `final_count`, `image_count_before`, `image_count_after`, `metric_source`
+
+Failure modes:
+- Using inconsistent time windows.
+- Filtering Wan Chai with only `NAME_EN == 'Wan Chai'` when the dataset stores `Wan Chai District` or Chinese-only `NAME_TC`, causing `final_count==0` and false `WARN_APPROX_AOI`.
+- Not checking which radiance band should be summarized.
+- Calling `.first().geometry()` on an empty filtered boundary result.
+- Continuing reductions after AOI preflight failure.
+- Silently replacing user-requested district/region without explicit confirmation.
+- Coercing missing stats to 0 and reporting fake delta values.
+- Python boolean misuse on deferred objects (`.Not()` or native `not/and/or`) can break execution with `ComputedObject` errors.
+- Boundary inspect/load failure ignored (no `BLOCKED_MISSING_BOUNDARY_ASSET`) can cascade into null-feature geometry errors.
+
+Promotion checklist:
+- [ ] GEE Code Editor (JavaScript) 原生跑通
+- [ ] agent execution 跑通
+- [ ] 前后端联调跑通
+- [ ] band / scale / reducer / unit 已核实
+- [ ] 结果输出稳定
+
+===

@@ -1,0 +1,225 @@
+## DRAFT: NDVI Time-Series Breakpoint Detection
+
+Status: draft
+Priority: P1
+Category: paper_scene
+Confidence: medium
+Validation stage: not_started
+
+Why this candidate:
+- Breakpoint detection is a strong "method-oriented" case for research and advanced coursework.
+- It fills a capability gap beyond ordinary NDVI trend summaries by detecting abrupt regime shifts.
+- It remains non-interactive with compact outputs (break year/period and before-after difference).
+
+Suggested source:
+- Earth Engine temporal segmentation references and verified open examples
+- gishub time-series analysis notebooks adapted to lightweight outputs
+- Public research-oriented GEE workflows (including Wuqiusheng-style repos) simplified for reproducible assignments
+- Earth Engine case-study narrative patterns adapted to non-map summaries
+
+## FEW_SHOT: NDVI Time-Series Breakpoint Detection for an AOI
+
+Intent: execution
+Task type: data exploration
+Keywords: NDVI, breakpoint, changepoint, time series, disturbance, vegetation dynamics
+
+User task pattern:
+"Detect major breakpoints in NDVI time series over my AOI and summarize when and how strong the change is."
+"For Hong Kong Central and Western District, return breakpoint_year, pre_mean_ndvi, post_mean_ndvi, delta_ndvi."
+
+Public datasets in this case:
+- MODIS/061/MOD13Q1
+
+Optional boundary or AOI source:
+- user provided AOI
+
+Auto-AOI strategy (when user does not specify range):
+- place name -> OSM or admin boundary resolve (default example place: Hong Kong)
+- fallback to current map context small AOI
+- if both unavailable, ask user for place name or AOI
+
+AOI consistency template (global, reusable):
+- preferred AOI source order:
+  1) user-provided geometry or asset ID
+  2) for Hong Kong district-level requests: `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`
+  3) OSM/Nominatim place boundary resolve (default example place: Hong Kong)
+  4) FAO/GAUL/2015/level2 (or equivalent accessible admin boundary)
+  5) current map context small AOI
+- do not depend on private or unverified assets unless access is confirmed.
+- when user explicitly confirms `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, treat it as verified primary source for Hong Kong district tasks.
+- if AOI resolution fails, first try documented fallback boundaries; if still unresolved, continue with a controlled approximate AOI and ask for clarification.
+  Do not return 0-area results as valid outputs when AOI is unresolved.
+  If diagnostics show final_count==0 or empty geometry, print `WARN_APPROX_AOI` and continue in degraded mode using controlled approximate AOI, and clearly report uncertainty.
+  Never coerce null/None statistics to 0 when AOI is unresolved.
+- in follow-up turns, keep prior AOI and method unless the user explicitly asks to change them.
+
+Boundary and AOI robustness guardrails:
+- Always keep and print `aoi_source` and `boundary_asset` metadata in execution outputs.
+- For admin-boundary lookup, use exact field match first, then controlled `stringContains` fallback in the same boundary dataset.
+- If boundary match count is 0, do not silently switch to unrelated boundary datasets; ask user or use documented fallback only.
+- When using `FAO/GAUL/2015/level2`, resolve target names from real fields (`ADM0_NAME`, `ADM1_NAME`, `ADM2_NAME`) and print sampled candidate names before final filter.
+- Do not hardcode city names into a fixed level field (for example, avoid assuming a city must exist in `ADM2_NAME`); verify level-field alignment first.
+- Never replace the user-requested place/admin target with another district name; require explicit user confirmation before switching target.
+- If reduction output key is missing/null, retry once with a small buffered AOI and tag the metric source.
+- Never coerce missing statistics to 0; keep null/None and explain why.
+- Always print AOI diagnostics (`candidate_count`, `final_count`, and period `image_count`) before final summary.
+- For `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, preview both `NAME_EN` and `NAME_TC` before filtering.
+- For Hong Kong district-level matching, use alias-safe filters on real fields (English + Chinese aliases) instead of a single hardcoded district string.
+- For Central and Western targeting, include aliases in matching:
+  `Central and Western`, `Central & Western`, `Central and Western District`, `中西區`, `中西区`.
+- Use exact-match first, then controlled `stringContains` fallback on both `NAME_EN` and `NAME_TC`.
+
+Critical rules (must follow):
+1) Before AOI selection, print boundary candidate names/counts with real fields, then do exact match and controlled fallback in the same dataset.
+2) Boundary asset lock: when GAUL is used, the asset path must be exactly `FAO/GAUL/2015/level2`; do not rewrite as `projects/...` aliases.
+3) If boundary inspect/load fails, output `BLOCKED_MISSING_BOUNDARY_ASSET` and stop this workflow before AOI geometry/materialization.
+4) State breakpoint method assumptions clearly (windowing, threshold, or segmentation settings).
+5) Return textual/table outputs only; no interactive map dependency.
+6) Distinguish abrupt breakpoint detection from simple linear trend reporting.
+7) Avoid overlap with basic NDVI monthly/annual summary cases by preserving method-specific outputs.
+8) Default to short recent range first (recommended: 2018-2022 for breakpoint stability), expand only on explicit request.
+9) Before choosing end year, inspect collection availability and cap to the latest complete year available in the dataset.
+10) For each year, compute and keep `year_image_count`; if count is 0, keep that year as null and exclude it from delta comparison.
+11) Never call `.geometry()` on a possibly null feature; guard with match count first and emit `WARN_APPROX_AOI` if unresolved, then continue with controlled approximate AOI in degraded mode.
+12) Cross-language safe logic is mandatory: never use Python native boolean operators (`not`, `and`, `or`, `!=`) on deferred `ee.*` objects.
+13) In Python outputs, never call `.Not()` on `ee.ComputedObject`; use `ee.Algorithms.If` and server-side comparisons.
+14) Gate all breakpoint and delta derivations with server-side validity checks; if pre/post values are missing, keep null and skip synthetic fallback values.
+15) Do not use `feature.getInfo() is None` to test AOI existence.
+    Determine AOI availability by server-side filtered count (`candidate_count` / `final_count`) first, then materialize geometry.
+16) Output contract for this query is strict: `breakpoint_year`, `pre_mean_ndvi`, `post_mean_ndvi`, `delta_ndvi`.
+    Do not replace null with 0, and do not rename these four keys.
+
+Latency-first options:
+- Scope: recent 4-5 years first (recommended: 2018-2022), then full archive only if needed
+- Output shape: breakpoint_year, pre_mean_ndvi, post_mean_ndvi, delta_ndvi
+- Degrade path: full segmented series -> single dominant breakpoint summary
+- Note: do NOT remove AOI by default; large/global region is usually slower.
+- Note: "no manual range" should mean "auto-derived small AOI", not global computation.
+
+Minimal runnable path:
+- Resolve Central and Western AOI from `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary` using alias-safe matching on `NAME_EN` + `NAME_TC`.
+- Build AOI NDVI time series from MOD13Q1 with proper scaling.
+- Aggregate by consistent temporal unit and run breakpoint detection logic.
+- Output dominant breakpoint using fields `breakpoint_year`, `pre_mean_ndvi`, `post_mean_ndvi`, `delta_ndvi`.
+- Use null-safe yearly aggregation: skip empty-year composites from breakpoint delta computation.
+- Keep all branch logic server-side compatible for both JavaScript and Python backends.
+
+Agent execution hardening (to prevent common backend failures):
+- Failure signature A: `Element.geometry: Parameter 'feature' is required and may not be null.`
+  - Root cause: AOI feature filter returns empty, then code calls `.first().geometry()`.
+  - Required fix: compute `final_count`; only materialize geometry when `final_count > 0`; otherwise print `WARN_APPROX_AOI` and continue in degraded mode with controlled approximate AOI.
+- Failure signature B: `Image.multiply: ... Got 0 and 1 bands`
+  - Root cause: yearly subset is empty and `.mean()`/`.median()` creates an empty image before scaling/math ops.
+  - Required fix: for each year, calculate `year_image_count` first; run reducers only when `year_image_count > 0`; keep null for empty years.
+- Failure signature C: `AttributeError: 'ComputedObject' object has no attribute 'Not'`
+  - Root cause: Python code applies `.Not()`/native boolean operations on deferred `ee` objects.
+  - Required fix: replace with explicit server-side branching via `ee.Algorithms.If` and `ee.Number(...).gt/lt/eq`.
+- Failure signature D: false `WARN_APPROX_AOI` after successful boundary inspect.
+  - Root cause: client-side null check like `aoi_feature.getInfo() is None` or single-name hard match only.
+  - Required fix: use alias-safe filters on `NAME_EN`/`NAME_TC`, compute `final_count` first, and prefer exact AOI geometry; when unresolved, degrade with controlled approximate AOI plus uncertainty tag.
+- Output contract for validation prompts:
+  1) AOI diagnostics: `aoi_source`, `boundary_asset`, `candidate_count`, `final_count`, `image_count`
+  2) Method assumptions: temporal unit, scale factor, breakpoint criterion
+  3) Tables: `yearly_ndvi_series`, `breakpoint_candidates`, `dominant_breakpoint`
+  4) Conclusion: dominant breakpoint year and `delta_ndvi`
+  5) Risks: two concise false-positive/false-negative risks
+
+Reference JavaScript snippet (GEE Code Editor):
+```javascript
+var boundary = ee.FeatureCollection('projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary');
+var targetAliasesEn = ee.List(['Central and Western', 'Central & Western', 'Central and Western District']);
+var targetAliasesTc = ee.List(['中西區', '中西区']);
+var exactEn = boundary.filter(ee.Filter.inList('NAME_EN', targetAliasesEn));
+var exactTc = boundary.filter(ee.Filter.inList('NAME_TC', targetAliasesTc));
+var exactMatch = exactEn.merge(exactTc);
+var containsEn = boundary.filter(ee.Filter.or(
+  ee.Filter.stringContains('NAME_EN', 'Central and Western'),
+  ee.Filter.stringContains('NAME_EN', 'Central')
+));
+var containsTc = boundary.filter(ee.Filter.stringContains('NAME_TC', '中西'));
+var finalMatch = ee.FeatureCollection(ee.Algorithms.If(
+  exactMatch.size().gt(0), exactMatch, containsEn.merge(containsTc)
+));
+var finalCount = finalMatch.size();
+print('final_count', finalCount);
+var aoi = ee.Feature(finalMatch.first()).geometry();
+var startYear = 2018;
+var endYear = 2022;
+
+var modis = ee.ImageCollection('MODIS/061/MOD13Q1')
+  .filterBounds(aoi)
+  .select('NDVI');
+
+var years = ee.List.sequence(startYear, endYear);
+var yearSeriesRaw = ee.FeatureCollection(years.map(function(y) {
+  y = ee.Number(y).toInt();
+  var start = ee.Date.fromYMD(y, 1, 1);
+  var end = start.advance(1, 'year');
+  var annual = modis.filterDate(start, end);
+  var yearImageCount = annual.size();
+  var meanVal = ee.Algorithms.If(
+    yearImageCount.gt(0),
+    annual.mean().multiply(0.0001).rename('NDVI').reduceRegion({
+      reducer: ee.Reducer.mean(),
+      geometry: aoi,
+      scale: 250,
+      maxPixels: 1e13
+    }).get('NDVI'),
+    null
+  );
+
+  return ee.Feature(null, {
+    year: y,
+    year_image_count: yearImageCount,
+    mean_ndvi: meanVal
+  });
+}));
+
+var yearSeries = yearSeriesRaw
+  .filter(ee.Filter.notNull(['mean_ndvi']))
+  .sort('year');
+
+var yearList = yearSeries.toList(yearSeries.size());
+var deltas = ee.FeatureCollection(ee.List.sequence(1, yearSeries.size().subtract(1)).map(function(i) {
+  i = ee.Number(i).toInt();
+  var prevF = ee.Feature(yearList.get(i.subtract(1)));
+  var currF = ee.Feature(yearList.get(i));
+  var prevMean = ee.Number(prevF.get('mean_ndvi'));
+  var currMean = ee.Number(currF.get('mean_ndvi'));
+  var delta = currMean.subtract(prevMean);
+  return ee.Feature(null, {
+    breakpoint_year: currF.get('year'),
+    pre_mean_ndvi: prevMean,
+    post_mean_ndvi: currMean,
+    delta_ndvi: delta,
+    abs_delta: delta.abs()
+  });
+}));
+
+var dominant = deltas.sort('abs_delta', false).first();
+
+print('yearly_ndvi_series', yearSeriesRaw);
+print('breakpoint_candidates', deltas);
+print('dominant_breakpoint', dominant);
+```
+
+Expected output:
+- Breakpoint summary with fields: `breakpoint_year`, `pre_mean_ndvi`, `post_mean_ndvi`, `delta_ndvi`
+
+Failure modes:
+- No scaling for MODIS NDVI causes threshold mismatch and false breakpoints.
+- Time unit inconsistency (mixing 16-day and yearly values) invalidates method assumptions.
+- Null AOI feature passed to `.geometry()` causes hard failure before reduction.
+- Empty annual subset can produce empty-band images and break arithmetic operations.
+- Python boolean misuse on deferred objects (`.Not()` or native `not/and/or`) can break execution with `ComputedObject` errors.
+- Rewriting GAUL path to `projects/...` aliases can break boundary inspect/load and cascade into null-geometry failures.
+- Using `getInfo()` for AOI null checks can cause false missing-AOI branches even when aliases exist in boundary fields.
+
+Promotion checklist:
+- [ ] GEE Code Editor (JavaScript) native run passed
+- [ ] agent execution passed
+- [ ] frontend integration passed
+- [ ] band / scale / reducer / unit verified
+- [ ] output remains stable across reruns
+
+===

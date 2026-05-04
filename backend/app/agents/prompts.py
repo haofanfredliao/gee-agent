@@ -33,6 +33,8 @@ PLANNER_PROMPT = """\
 {query}
 
 {session_section}
+{kb_section}
+
 请将上述请求分解为有序的子步骤，以 JSON 数组格式返回。
 每个步骤是一个对象，包含以下字段：
   - "description" : 步骤的中文描述（简洁，15 字以内）
@@ -47,6 +49,9 @@ PLANNER_PROMPT = """\
 2. execute 步骤总数控制在 1–3 步，不要过度拆解。总步骤数不超过 N+3。
 3. 只输出 JSON 数组，不要有任何额外说明或 markdown 标记。
 4. 若会话上下文中已有对应 asset 的元数据，可直接跳过该 asset 的 inspect。
+5. 若参考知识中存在“已弃用/替代”关系，必须使用替代后的 canonical 数据集 ID。
+   例如：Sentinel-2 SR 必须使用 "COPERNICUS/S2_SR_HARMONIZED"，不得使用 "COPERNICUS/S2_SR"。
+6. 严禁凭空引入用户未提供、会话上下文也未出现的私有资产路径（projects/.../assets/...）。
 
 示例（两个 asset）：
 [
@@ -117,6 +122,8 @@ SUMMARIZE_PROMPT = """\
 - 数据集的主要特征（属性字段、要素数量、几何类型等）
 - 分析计算的核心结论（如区域数量、面积分布等）
 - 如已添加可视化图层，简要说明
+- 严格依据步骤记录判断成功/失败：如果步骤失败，或输出中包含 error、StaticVisualizationError、未生成 tile、layers 为空，
+  不得声称“已成功添加图层”或“已完成可视化”，应明确说明未生成地图图层。
 
 回答要简洁、准确、直面用户的问题，不要重复已知信息。
 """
@@ -145,3 +152,38 @@ KNOWLEDGE_PROMPT = """\
 用户问题：
 {query}
 """
+
+
+# ─── 模块导入时自检 ────────────────────────────────────────────────────────────
+# 防止 SANDBOX_CONSTRAINTS_BLOCK 或 prompt 正文里出现未转义的 `{...}`，
+# 导致运行时 str.format() 抛 "Replacement index 0 out of range for positional args tuple"。
+def _validate_prompt_templates() -> None:
+    test_cases = [
+        ("PLANNER_PROMPT", PLANNER_PROMPT, dict(
+            query="", session_section="", kb_section="")),
+        ("CODE_GEN_PROMPT", CODE_GEN_PROMPT, dict(
+            query="", step_description="", context_section="",
+            kb_section="", prev_steps_section="", session_section="")),
+        ("CODE_REPAIR_PROMPT", CODE_REPAIR_PROMPT, dict(
+            query="", step_description="", context_section="", kb_section="",
+            prev_steps_section="", original_code="", error_log="", attempt=1)),
+        ("SUMMARIZE_PROMPT", SUMMARIZE_PROMPT, dict(
+            query="", steps_summary="")),
+        ("GEO_REPLY_PROMPT", GEO_REPLY_PROMPT, dict(
+            place_name="", center_lat=0.0, center_lon=0.0, bbox="")),
+        ("KNOWLEDGE_PROMPT", KNOWLEDGE_PROMPT, dict(
+            kb_context="", query="")),
+    ]
+    for name, tpl, kwargs in test_cases:
+        try:
+            tpl.format(**kwargs)
+        except (IndexError, KeyError, ValueError) as e:
+            raise RuntimeError(
+                f"[prompts] 模板 {name} 启动自检失败：{type(e).__name__}: {e}\n"
+                "常见原因：SANDBOX_CONSTRAINTS_BLOCK 或 prompt 正文含有未转义的花括号，"
+                "Python .format() 会把单层 '{...}' 当作占位符解析。\n"
+                "修复：把示意用的花括号改成其他符号（如 <...>），或用 '{{' '}}' 转义成字面量。"
+            ) from e
+
+
+_validate_prompt_templates()

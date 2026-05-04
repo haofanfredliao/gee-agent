@@ -1,0 +1,278 @@
+## DRAFT: MODIS NDVI Time Series Summary
+
+Status: validating
+Priority: P1
+Category: paper_scene
+Confidence: high
+Validation stage: frontend_passed
+
+Why this candidate:
+- MODIS NDVI 是经典时序分析场景，适合做轻量论文/作业复现。
+- 输出可以是季度或年度均值表，很适合 RAG 条目。
+
+Suggested source:
+- MODIS vegetation examples
+- giswqs time-series notebooks
+
+## FEW_SHOT: MODIS NDVI Time Series Summary for an AOI
+
+Intent: execution
+Task type: data exploration
+Keywords: MODIS, NDVI, time series, annual mean, vegetation, phenology
+
+User task pattern:
+"Use MODIS NDVI to summarize vegetation changes over time in my AOI."
+
+Public datasets in this case:
+- MODIS/061/MOD13Q1
+
+Optional boundary or AOI source:
+- user provided AOI
+
+Auto-AOI strategy (when user does not specify range):
+- place name -> OSM or admin boundary resolve (default example place: Hong Kong)
+- fallback to current map context small AOI
+- if both unavailable, ask user for place name or AOI
+
+AOI consistency template (global, reusable):
+- preferred AOI source order:
+  1) user-provided geometry or asset ID
+  2) for Hong Kong district-level requests: `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`
+  3) OSM/Nominatim place boundary resolve (default example place: Hong Kong)
+  4) FAO/GAUL/2015/level2 (or equivalent accessible admin boundary)
+  5) current map context small AOI
+- do not depend on private or unverified assets unless access is confirmed.
+- when user explicitly confirms `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, treat it as verified primary source for Hong Kong district tasks.
+- if AOI resolution fails, first try documented fallback boundaries; if still unresolved, continue with a controlled approximate AOI and ask for clarification.
+  Do not return 0-area results as valid outputs when AOI is unresolved.
+  If diagnostics show final_count==0 or empty geometry, print `WARN_APPROX_AOI` and continue in degraded mode using controlled approximate AOI, and clearly report uncertainty.
+  Never coerce null/None statistics to 0 when AOI is unresolved.
+- in follow-up turns, keep prior AOI and method unless the user explicitly asks to change them.
+
+Boundary and AOI robustness guardrails:
+- Always keep and print `aoi_source` and `boundary_asset` metadata in execution outputs.
+- For admin-boundary lookup, use exact field match first, then controlled `stringContains` fallback in the same boundary dataset.
+- If boundary match count is 0, do not silently switch to unrelated boundary datasets; ask user or use documented fallback only.
+- Never replace the user-requested place/admin target with another district name; require explicit user confirmation before switching target.
+- If reduction output key is missing/null, retry once with a small buffered AOI and tag the metric source.
+- Never coerce missing statistics to 0; keep null/None and explain why.
+- Always print AOI diagnostics (`candidate_count`, `final_count`, and period `image_count`) before final summary.
+- For `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`, preview both `NAME_EN` and `NAME_TC` before filtering.
+- For Hong Kong district-level matching, use alias-safe filters on real fields (English + Chinese aliases) instead of a single hardcoded district string.
+
+Critical rules (must follow):
+1) Before AOI selection, print boundary candidate names/counts with real fields, then do exact match and controlled fallback in the same dataset.
+2) Aggregate by a clearly defined time unit such as year or quarter.
+3) Return a time series table, not only a single summary.
+4) Dataset lock: use `MODIS/061/MOD13Q1` for this pattern; do not substitute Landsat/Sentinel NDVI collections.
+5) Boundary asset lock: when GAUL is used, the asset path must be exactly `FAO/GAUL/2015/level2`.
+   Do not rewrite it as `projects/google/datasets/...` and do not switch to private/unverified boundary assets.
+6) If boundary inspect/load fails, output `BLOCKED_MISSING_BOUNDARY_ASSET` and stop this workflow; do not execute downstream NDVI steps.
+7) Never call `.first()` / `.geometry()` on unchecked boundary filters; verify `.size()` first, then branch with hard gate.
+8) Scope lock: if the user request is about stable water/occurrence/JRC thresholds, do not run this NDVI workflow and route to the water-occurrence RAG pattern.
+9) Use `scale=250` for MOD13Q1 and do not use `bestEffort=True` to bypass pixel limits.
+10) In Python sandbox, avoid direct `Dictionary.get('key')` on uncertain outputs; check `.contains('key')` first.
+11) For Hong Kong Central and Western, boundary matching must use actual GAUL fields and include fallback matching.
+12) For tiny coastal AOI, if yearly reduction over ROI has no valid key, retry with `roi.buffer(500)`; keep both value and source geometry tag.
+13) Always print ROI candidate counts (`exact_count`, `fallback_count`, `final_count`) before yearly table.
+14) Default to short recent range first (recommended: 2020-2022); expand only if the user explicitly asks.
+15) Before fixing end year, inspect collection availability and cap to the latest complete year available in the dataset.
+16) Cross-language safe logic is mandatory: never use Python native boolean operators (`not`, `and`, `or`, `!=`) on deferred `ee.*` objects.
+17) In Python outputs, never call `.Not()` on `ee.ComputedObject`; use `ee.Algorithms.If` and numeric/filter comparisons.
+18) For each period, compute `image_count` first and gate reduction/calculation by server-side conditions; if count is 0, keep metrics as null and do not fabricate values.
+
+Latency-first options:
+- Scope: recent 3 years first (recommended: 2020-2022), then expand on request
+- Output shape: period -> mean_ndvi
+- Degrade path: full series table -> yearly means -> single trend summary
+- Note: do NOT remove AOI by default; large/global region is usually slower.
+- Note: "no manual range" should mean "auto-derived small AOI", not global computation.
+
+Minimal runnable path:
+- Filter MODIS NDVI by AOI and time range.
+- Convert values to the expected NDVI scale.
+- Reduce each period over the AOI and return a time series table.
+- If AOI feature count is zero, fallback to alternative name matching before reduction.
+- Include `image_count` for each year to avoid returning misleading all-zero rows.
+- If `NDVI_scaled` key is missing at AOI scale, retry with buffered AOI and record fallback source.
+- Keep all branch logic server-side compatible for both JavaScript and Python backends.
+
+Cross-language robustness (generalization guardrails):
+- JavaScript-style boolean chaining can be unsafe when naively translated to Python for deferred `ee` objects.
+- Python generators should follow: derive count/flag server-side -> branch via `ee.Algorithms.If` -> avoid native Python boolean evaluation.
+- If backend reports `AttributeError: 'ComputedObject' object has no attribute 'Not'`, treat as a hard rule violation and regenerate with explicit server-side branching.
+
+Reference JavaScript snippet (GEE Code Editor):
+```javascript
+var aoi = ee.Geometry.Rectangle([113.95, 22.28, 114.05, 22.38]); // replace if available
+var startYear = 2020;
+var endYear = 2022;
+
+var modis = ee.ImageCollection('MODIS/061/MOD13Q1')
+  .filterBounds(aoi)
+  .select('NDVI');
+
+var years = ee.List.sequence(startYear, endYear);
+
+var yearlySeries = ee.FeatureCollection(years.map(function(y) {
+  y = ee.Number(y).toInt();
+  var start = ee.Date.fromYMD(y, 1, 1);
+  var end = start.advance(1, 'year');
+
+  var yearlyNdvi = modis
+    .filterDate(start, end)
+    .mean()
+    .multiply(0.0001)
+    .rename('NDVI');
+
+  var meanNdvi = yearlyNdvi.reduceRegion({
+    reducer: ee.Reducer.mean(),
+    geometry: aoi,
+    scale: 250,
+    maxPixels: 1e13
+  }).get('NDVI');
+
+  return ee.Feature(null, {
+    year: y,
+    mean_ndvi: meanNdvi
+  });
+}));
+
+print('yearly_ndvi_series', yearlySeries);
+```
+
+Python sandbox-safe snippet (for agent execution):
+```python
+import ee
+
+gaul = ee.FeatureCollection("FAO/GAUL/2015/level2")
+
+roi_exact = (
+    gaul
+    .filter(ee.Filter.eq("ADM0_NAME", "China"))
+    .filter(ee.Filter.eq("ADM1_NAME", "Hong Kong"))
+    .filter(ee.Filter.eq("ADM2_NAME", "Central and Western"))
+)
+
+roi_fallback = (
+    gaul
+    .filter(ee.Filter.eq("ADM0_NAME", "China"))
+    .filter(ee.Filter.stringContains("ADM1_NAME", "Hong"))
+    .filter(ee.Filter.stringContains("ADM2_NAME", "Central"))
+    .filter(ee.Filter.stringContains("ADM2_NAME", "Western"))
+)
+
+roi_fc = ee.FeatureCollection(
+    ee.Algorithms.If(roi_exact.size().gt(0), roi_exact, roi_fallback)
+)
+roi = roi_fc.geometry()
+roi_buffer = roi.buffer(500)
+
+print("roi_match_counts")
+print(ee.Dictionary({
+    "exact_count": roi_exact.size(),
+    "fallback_count": roi_fallback.size(),
+    "final_count": roi_fc.size()
+}).getInfo())
+
+modis = (
+    ee.ImageCollection("MODIS/061/MOD13Q1")
+    .filterBounds(roi)
+    .select("NDVI")
+)
+
+years = ee.List.sequence(2020, 2022)
+
+def annual_feature(y):
+    y = ee.Number(y).toInt()
+    start = ee.Date.fromYMD(y, 1, 1)
+    end = start.advance(1, "year")
+    col = modis.filterDate(start, end)
+    count = col.size()
+    img = col.mean().multiply(0.0001).rename("NDVI_scaled")
+
+    stats = ee.Dictionary(
+        ee.Algorithms.If(
+            count.gt(0),
+            img.reduceRegion(
+                reducer=ee.Reducer.mean(),
+                geometry=roi,
+                scale=250,
+                maxPixels=1e13
+            ),
+            ee.Dictionary({})
+        )
+    )
+
+    stats_buffer = ee.Dictionary(
+        ee.Algorithms.If(
+            count.gt(0),
+            img.reduceRegion(
+                reducer=ee.Reducer.mean(),
+                geometry=roi_buffer,
+                scale=250,
+                maxPixels=1e13
+            ),
+            ee.Dictionary({})
+        )
+    )
+
+    use_direct = stats.contains("NDVI_scaled")
+    ndvi_mean = ee.Algorithms.If(
+        use_direct,
+        stats.get("NDVI_scaled"),
+        ee.Algorithms.If(
+            stats_buffer.contains("NDVI_scaled"),
+            stats_buffer.get("NDVI_scaled"),
+            None
+        )
+    )
+    ndvi_source = ee.Algorithms.If(
+        use_direct,
+        "roi",
+        ee.Algorithms.If(stats_buffer.contains("NDVI_scaled"), "roi_buffer_500m", "no_valid_pixel")
+    )
+
+    return ee.Feature(None, {
+        "year": y,
+        "image_count": count,
+        "ndvi_mean": ndvi_mean,
+        "ndvi_source": ndvi_source
+    })
+
+ndvi_fc = ee.FeatureCollection(years.map(annual_feature)).sort("year")
+
+print("hong_kong_central_western_ndvi_timeseries")
+print(ndvi_fc.getInfo())
+
+latest_2022 = modis.filterDate("2022-01-01", "2023-01-01").mean().multiply(0.0001).rename("NDVI_scaled")
+latest_2022_vis = ee.Image(
+    ee.Algorithms.If(roi_fc.size().gt(0), latest_2022.clip(roi), latest_2022)
+)
+Map.addLayer(latest_2022_vis, {"min": 0, "max": 1, "palette": ["white", "green"]}, "2022 NDVI")
+Map.addLayer(roi_fc, {"color": "red"}, "ROI")
+```
+
+Expected output:
+- Period -> mean NDVI table
+
+Failure modes:
+- Forgetting scale factors for MODIS products.
+- Mixing different temporal resolutions without explaining the aggregation.
+- `ADM2_NAME` exact-match miss leads to empty ROI and clip/reduction failure.
+- Returning default 0 when key is missing can hide data errors and produce fake all-zero time series.
+- Tiny coastal AOI at 250 m can produce missing keys unless buffered fallback is implemented.
+- Python boolean misuse on deferred objects (`.Not()` or native `not/and/or`) can break execution with `ComputedObject` errors.
+- Rewriting GAUL asset path to `projects/google/datasets/...` causes boundary inspect/load failure.
+- Continuing NDVI computation after boundary-asset failure leads to null-feature geometry errors.
+- Substituting Landsat NDVI in this MODIS-specific pattern causes method drift and unstable outputs.
+- Misrouting water-occurrence requests into this NDVI pattern yields irrelevant outputs and should be blocked/rerouted.
+
+Promotion checklist:
+- [x] GEE Code Editor (JavaScript) 原生跑通
+- [x] agent execution 跑通
+- [x] 前后端联调跑通
+- [ ] band / scale / reducer / unit 已核实
+- [ ] 结果输出稳定
+
+===
