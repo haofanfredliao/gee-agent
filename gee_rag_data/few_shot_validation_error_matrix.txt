@@ -24,6 +24,11 @@ Critical rules (must follow):
 4) Respect Earth Engine lazy execution.
    - Build server-side pipeline first.
    - Only materialize small final outputs (matrix and metrics) at the end.
+5) Final answer readiness is part of the task.
+   - The code must print concrete metric values using these exact labels:
+     `Error Matrix:`, `Overall Accuracy:`, `Producers Accuracy:`, `Users Accuracy:`, `Kappa Index:`.
+   - Do not only print "computed" / "done" / variable names.
+   - The final answer must directly list OA, PA, UA, Kappa, and the error matrix values when present in logs.
 
 Positive ReAct trajectory:
 - Observe:
@@ -77,6 +82,10 @@ Anti-patterns to avoid:
 - Using scale=30 without inspecting image nominal scale.
 - Using actual='ref' and predicted='b1' by assumption.
 - Treating sampled map band as predicted and sample field as actual.
+- Saying "Overall Accuracy has been calculated" without printing the numeric Overall Accuracy value.
+- Saying "Users/Producers Accuracy were computed" without printing the arrays.
+- Saying "Kappa was completed" without printing the numeric kappa value.
 
 Expected behavior for this pattern:
 - Kappa should align with the Code Editor baseline when field mapping and scale are correct.
+- Final reply should include the concrete Error Matrix, Overall Accuracy, Producers Accuracy, Users Accuracy, and Kappa Index.

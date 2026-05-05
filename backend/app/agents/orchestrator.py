@@ -9,7 +9,7 @@
 
 对外接口：
   run_workflow(query, session_id)   -> ChatResponse        （一次性返回）
-  stream_workflow(query, session_id) -> AsyncGenerator[str] （SSE 流式事件）
+  stream_workflow(query, session_id) -> AsyncGenerator[str] （NDJSON 流式事件）
 
 流式事件格式（每行一个 JSON，以 \\n 结尾）：
   {"type": "routing",    "data": {"intent": "execution"}}
@@ -60,6 +60,16 @@ S2_SR_EXACT_TOKEN_RE = re.compile(r"(?<![A-Z0-9_])COPERNICUS/S2_SR(?![A-Z0-9_])"
 FORCE_IMAGE_COLLECTION_IDS = (
     "COPERNICUS/S2_SR_HARMONIZED",
     "COPERNICUS/S2_CLOUD_PROBABILITY",
+)
+_BOUNDARY_ASSET_HINTS = (
+    "boundary",
+    "district",
+    "admin",
+    "administrative",
+    "region",
+    "aoi",
+    "roi",
+    "polygon",
 )
 
 
@@ -141,16 +151,108 @@ def _remove_projection_forcing(code: str) -> str:
         return code
 
 
-def _autofix_common_code_errors(code: str, error_log: str) -> str:
+def _fix_ee_list_get_default_arg(code: str) -> str:
+    """
+    Earth Engine Python ee.List.get() only accepts the index argument.
+    Some generated code incorrectly uses Python-dict style defaults:
+      my_list.get(index, fallback)
+    This helper removes the fallback argument when the receiver is very likely
+    an ee.List so the normal repair loop can continue from a syntactically and
+    API-valid baseline.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    def _is_ee_list_constructor(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "ee"
+            and node.func.attr == "List"
+        )
+
+    list_vars: set[str] = set()
+
+    class ListVarCollector(ast.NodeVisitor):
+        def visit_Assign(self, node: ast.Assign) -> None:
+            self.generic_visit(node)
+            if not _is_ee_list_constructor(node.value):
+                return
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    list_vars.add(target.id)
+
+        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+            self.generic_visit(node)
+            if isinstance(node.target, ast.Name) and _is_ee_list_constructor(node.value):
+                list_vars.add(node.target.id)
+
+    ListVarCollector().visit(tree)
+
+    def _is_list_like_expr(node: ast.AST) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in list_vars
+        if _is_ee_list_constructor(node):
+            return True
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr in {"distinct", "sort", "slice", "cat", "flatten", "map"}:
+                return _is_list_like_expr(node.func.value)
+        return False
+
+    class ListGetDefaultFixer(ast.NodeTransformer):
+        def visit_Call(self, node: ast.Call) -> ast.AST:
+            self.generic_visit(node)
+            if (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and len(node.args) == 2
+                and not node.keywords
+                and _is_list_like_expr(node.func.value)
+            ):
+                node.args = [node.args[0]]
+            return node
+
+    new_tree = ListGetDefaultFixer().visit(tree)
+    ast.fix_missing_locations(new_tree)
+    try:
+        return ast.unparse(new_tree)
+    except Exception:
+        return code
+
+
+def _replace_load_aoi_boundary_with_asset_fc(code: str, asset_id: Optional[str]) -> str:
+    if not asset_id or "load_aoi_boundary" not in code:
+        return code
+    quoted_asset_id = json.dumps(asset_id, ensure_ascii=False)
+    return re.sub(
+        r"\bload_aoi_boundary\s*\(\s*\)",
+        f"ee.FeatureCollection({quoted_asset_id})",
+        code,
+    )
+
+
+def _autofix_common_code_errors(
+    code: str,
+    error_log: str,
+    *,
+    aoi_boundary_asset_id: Optional[str] = None,
+) -> str:
     """
     Try deterministic one-shot fixes before invoking another LLM repair round.
     This improves latency for recurrent, well-known type mistakes.
     """
     lowered = (error_log or "").lower()
+    if "no aoi boundary cache was prepared" in lowered and aoi_boundary_asset_id:
+        return _replace_load_aoi_boundary_with_asset_fc(code, aoi_boundary_asset_id)
     if "featurecollection" in lowered and "mosaic" in lowered:
         return _normalize_code_asset_ids(code)
     if "staticprojectionerror" in lowered:
         return _remove_projection_forcing(code)
+    if "list.get() takes 2 positional arguments but 3 were given" in lowered:
+        return _fix_ee_list_get_default_arg(code)
     return code
 
 
@@ -214,6 +316,57 @@ def _query_asks_for_cloudless_composite(query: str) -> bool:
     return (not _query_asks_for_same_day_mosaic(q)) and any(term in q for term in cloudless_terms)
 
 
+def _query_uses_landsat(query: str) -> bool:
+    q = (query or "").lower()
+    return bool(re.search(r"landsat\s*[89]?|\bl[89]\b|陆地卫星", q, flags=re.IGNORECASE))
+
+
+def _query_asks_for_uhi(query: str) -> bool:
+    q = (query or "").lower()
+    terms = (
+        "urban heat island",
+        "surface urban heat island",
+        "heat island",
+        "heat island intensity",
+        "uhi",
+        "城市热岛",
+        "热岛强度",
+        "热岛",
+    )
+    return any(term in q for term in terms)
+
+
+def _query_asks_for_lst(query: str) -> bool:
+    q = (query or "").lower()
+    terms = (
+        "lst",
+        "land surface temperature",
+        "surface temperature",
+        "地表温度",
+    )
+    return any(term in q for term in terms)
+
+
+def _query_asks_for_validation_metrics(query: str) -> bool:
+    q = (query or "").lower()
+    metric_terms = (
+        "error matrix",
+        "confusion matrix",
+        "overall accuracy",
+        "users accuracy",
+        "user's accuracy",
+        "users’ accuracy",
+        "producers accuracy",
+        "producer's accuracy",
+        "producers’ accuracy",
+        "kappa",
+        "精度",
+        "误差矩阵",
+        "混淆矩阵",
+    )
+    return any(term in q for term in metric_terms)
+
+
 def _query_expects_map_layer(query: str) -> bool:
     q = (query or "").lower()
     no_map_terms = (
@@ -260,12 +413,22 @@ def _query_expects_map_layer(query: str) -> bool:
         "影像",
         "remote sensing",
         "remotesensing",
+        "image",
         "imagery",
         "图层",
         "可视化",
         "显示",
         "map",
         "visualize",
+        "urban heat island",
+        "heat island",
+        "uhi",
+        "lst",
+        "land surface temperature",
+        "surface temperature",
+        "地表温度",
+        "城市热岛",
+        "热岛",
     )
     return any(term in q for term in map_terms)
 
@@ -287,6 +450,12 @@ def _query_asks_for_imagery_product(query: str) -> bool:
         "最少云",
         "少云",
         "无云",
+        "urban heat island",
+        "heat island",
+        "uhi",
+        "lst",
+        "land surface temperature",
+        "surface temperature",
     )
     return any(term in q for term in terms)
 
@@ -338,6 +507,12 @@ def _build_query_slots_section(query: str) -> str:
         lines.append("基础影像=需要生成/显示遥感影像或 mosaic")
     if wants_imagery and indices:
         lines.append("任务类型=复合任务，必须同时生成基础遥感影像和用户点名的指数图层")
+    if _query_uses_landsat(query) and wants_imagery:
+        lines.append("Landsat覆盖策略=必须用多景 ImageCollection 合成完整覆盖 AOI，不能直接显示单景 first()")
+    if _query_asks_for_uhi(query):
+        lines.append("热岛任务=必须计算 urban_mean_temp / rural_mean_temp / uhi_intensity，不能只返回 LST 热力图")
+    elif _query_asks_for_lst(query):
+        lines.append("温度任务=计算 Landsat LST（地表温度），不要误写成 UHI 热岛强度")
 
     if not lines:
         return ""
@@ -379,9 +554,23 @@ _AOI_PLACE_PATTERNS = (
 
 
 _KNOWN_AOI_NAMES = (
+    "Hong Kong Special Administrative Region",
+    "Hong Kong SAR",
+    "Hong Kong Island",
+    "香港岛",
+    "港岛",
     "香港特别行政区",
     "香港",
     "Hong Kong",
+    "People's Republic of China",
+    "中华人民共和国",
+    "中国",
+    "China",
+    "广州市天河区",
+    "广州天河区",
+    "天河区",
+    "Tianhe District",
+    "Tianhe District, Guangzhou",
     "广州市",
     "广州",
     "Guangzhou",
@@ -394,6 +583,26 @@ _KNOWN_AOI_NAMES = (
     "上海市",
     "上海",
     "Shanghai",
+)
+
+
+_VISUAL_FOLLOWUP_TERMS = (
+    "进一步查看",
+    "查看影像效果",
+    "查看效果",
+    "影像效果",
+    "地图图层",
+    "生成地图图层",
+    "显示地图图层",
+    "图层效果",
+    "看看效果",
+    "再看一下",
+    "show map layer",
+    "show the layer",
+    "view the imagery",
+    "view image",
+    "inspect the image",
+    "look at the result",
 )
 
 
@@ -410,6 +619,12 @@ def _extract_known_aoi_name(query: str) -> Optional[str]:
 def _clean_aoi_place_candidate(candidate: str) -> Optional[str]:
     cleaned = (candidate or "").strip(" ，,。；;:：的范围区域")
     cleaned = re.sub(
+        r"^(?:需|需要|想|还想|请|麻烦)?\s*(?:进一步)?(?:查看|看看|看一下|再看一下|查看一下)\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
         r"^(?:那|那么)?\s*(?:请你|请|麻烦|帮我|帮忙|给我)?\s*"
         r"(?:用|使用|基于|提取|获取|生成|制作|计算|显示|可视化|做)?\s*",
         "",
@@ -417,6 +632,8 @@ def _clean_aoi_place_candidate(candidate: str) -> Optional[str]:
         flags=re.IGNORECASE,
     )
     cleaned = re.split(r"[，,。；;:：\n]", cleaned, maxsplit=1)[0]
+    cleaned = re.sub(r"^(?:for|in|over|around|within|across)\s+", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+(?:for|in|over|around|within|during|across)$", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\b(Sentinel-?2|S2|Landsat\s*[89]?|MODIS|GEE)\b", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\b(remote\s*sensing|remotesensing|imagery|image|mosaic|true\s*color)\b", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\b\d{4}\b.*$", "", cleaned).strip(" ，,。；;:：的范围区域")
@@ -446,6 +663,10 @@ def _clean_aoi_place_candidate(candidate: str) -> Optional[str]:
     if cleaned.lower() in remote_sensing_only:
         return None
     if any(term in cleaned for term in ("最少云", "少云", "无云", "遥感", "影像", "真彩色")):
+        return None
+    if any(term in cleaned.lower() for term in _VISUAL_FOLLOWUP_TERMS if term.isascii()):
+        return None
+    if any(term in cleaned for term in _VISUAL_FOLLOWUP_TERMS if not term.isascii()):
         return None
     # Follow-up phrases are context references, not place names.
     if any(term in cleaned for term in ("刚刚", "刚才", "根据", "帮我", "这个", "这张", "上一", "上次", "之前")):
@@ -512,7 +733,175 @@ def _query_refers_to_previous_product(query: str) -> bool:
         "previous image",
         "last image",
     )
-    return any(term in q.lower() for term in terms)
+    if any(term in q.lower() for term in terms):
+        return True
+    return _query_is_visual_followup(q)
+
+
+def _query_is_visual_followup(query: str) -> bool:
+    text = (query or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if any(term in lowered for term in _VISUAL_FOLLOWUP_TERMS if term.isascii()):
+        return True
+    return any(term in text for term in _VISUAL_FOLLOWUP_TERMS if not term.isascii())
+
+
+def _normalize_boundary_text(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", (text or "").strip()).lower()
+    return normalized
+
+
+def _is_polygon_geometry_type(value: Any) -> bool:
+    geometry_type = str(value or "").strip().lower()
+    return geometry_type in {"polygon", "multipolygon"}
+
+
+def _asset_id_looks_like_boundary(asset_id: str) -> bool:
+    lowered = (asset_id or "").lower()
+    return any(token in lowered for token in _BOUNDARY_ASSET_HINTS)
+
+
+def _pick_explicit_aoi_boundary_asset_id(context: Dict[str, Any], query: str = "") -> Optional[str]:
+    assets: Dict[str, Any] = context.get("assets") or {}
+    query_asset_ids = [
+        _normalize_asset_id(asset_id) or asset_id
+        for asset_id in _extract_asset_ids(query or "")
+        if isinstance(asset_id, str)
+    ]
+    candidates: List[tuple[int, str]] = []
+
+    for asset_id, meta in assets.items():
+        if not isinstance(asset_id, str):
+            continue
+        geometry_type = (meta or {}).get("geometry_type")
+        if not _is_polygon_geometry_type(geometry_type):
+            continue
+        score = 0
+        if asset_id in query_asset_ids:
+            score += 10
+        if _asset_id_looks_like_boundary(asset_id):
+            score += 8
+        lowered = asset_id.lower()
+        if "boundary" in lowered:
+            score += 4
+        if "district" in lowered:
+            score += 2
+        candidates.append((score, asset_id))
+
+    if candidates:
+        candidates.sort(key=lambda item: (-item[0], item[1]))
+        return candidates[0][1]
+
+    boundary_like_query_assets = [asset_id for asset_id in query_asset_ids if _asset_id_looks_like_boundary(asset_id)]
+    if len(boundary_like_query_assets) == 1:
+        return boundary_like_query_assets[0]
+    return None
+
+
+def _looks_like_pending_boundary_clarification(query: str, context: Dict[str, Any]) -> bool:
+    pending = context.get("aoi_boundary_candidates") or {}
+    options = pending.get("options") or []
+    text = (query or "").strip()
+    if not pending or not text or len(text) > 120:
+        return False
+
+    if re.fullmatch(r"(?:[1-5]|第?\s*[一二三四五12345]\s*(?:个|項|项)?|就用第?\s*[一二三四五12345]\s*(?:个|項|项)?)", text):
+        return True
+
+    extracted = _extract_aoi_place_name(text)
+    candidate_texts = [text]
+    if extracted and extracted not in candidate_texts:
+        candidate_texts.append(extracted)
+
+    for candidate_text in candidate_texts:
+        normalized = _normalize_boundary_text(candidate_text)
+        if not normalized:
+            continue
+        for option in options:
+            for label in (option.get("display_name"), option.get("name")):
+                option_text = _normalize_boundary_text(str(label or ""))
+                if option_text and (normalized in option_text or option_text in normalized):
+                    return True
+
+    return any(term in text for term in ("特别行政区", "特別行政區", "区", "區", "县", "縣", "市"))
+
+
+def _pick_pending_boundary_option(query: str, options: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    text = (query or "").strip()
+    if not text or not options:
+        return None
+
+    direct_index = re.fullmatch(r"(?:第?\s*([1-5一二三四五])\s*(?:个|項|项)?|就用第?\s*([1-5一二三四五])\s*(?:个|項|项)?)", text)
+    if direct_index:
+        raw = direct_index.group(1) or direct_index.group(2)
+        mapping = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5}
+        idx = mapping.get(raw, int(raw))
+        if 1 <= idx <= len(options):
+            return options[idx - 1]
+
+    candidate_texts = [text]
+    extracted = _extract_aoi_place_name(text)
+    if extracted and extracted not in candidate_texts:
+        candidate_texts.append(extracted)
+
+    matches: List[Dict[str, Any]] = []
+    for option in options:
+        labels = [str(option.get("display_name") or ""), str(option.get("name") or "")]
+        normalized_labels = [_normalize_boundary_text(label) for label in labels if label]
+        for candidate_text in candidate_texts:
+            normalized = _normalize_boundary_text(candidate_text)
+            if not normalized:
+                continue
+            if any(label and (normalized in label or label in normalized) for label in normalized_labels):
+                matches.append(option)
+                break
+
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _consume_pending_boundary_choice(state: WorkflowState) -> Optional[str]:
+    pending = state["context"].get("aoi_boundary_candidates") or {}
+    if not pending:
+        return None
+
+    option = _pick_pending_boundary_option(state["query"], pending.get("options") or [])
+    resolve_queries: List[str] = []
+    if option:
+        if option.get("display_name"):
+            resolve_queries.append(str(option["display_name"]))
+        if option.get("name"):
+            resolve_queries.append(str(option["name"]))
+    elif _looks_like_pending_boundary_clarification(state["query"], state["context"]):
+        resolve_queries.append(state["query"])
+        extracted = _extract_aoi_place_name(state["query"])
+        if extracted and extracted != state["query"]:
+            resolve_queries.append(extracted)
+    else:
+        return None
+
+    tried: set[str] = set()
+    for candidate_query in resolve_queries:
+        candidate_query = (candidate_query or "").strip()
+        if not candidate_query or candidate_query in tried:
+            continue
+        tried.add(candidate_query)
+        try:
+            resolved = resolve_osm_boundary(candidate_query, allow_ambiguous=True)
+        except Exception:
+            continue
+        if resolved.get("status") == "ok":
+            state["context"]["aoi_boundary"] = resolved
+            state["context"].pop("aoi_boundary_candidates", None)
+            return None
+
+    return (
+        "我还没有把上一轮的边界歧义消解掉。"
+        "请直接回复候选编号（例如“1”），或给出更完整的行政区名称。"
+    )
 
 
 def _format_ambiguous_boundary_reply(place_name: str, options: List[Dict[str, Any]]) -> str:
@@ -552,6 +941,48 @@ def _extract_logged_value(output: str, label: str) -> Optional[str]:
     return match.group(1).strip() if match else None
 
 
+def _extract_first_labeled_value(output: str, labels: tuple[str, ...], limit: int = 4_000) -> Optional[str]:
+    for label in labels:
+        value = _extract_logged_value(output, label)
+        if value:
+            return value[:limit] + ("..." if len(value) > limit else "")
+    return None
+
+
+def _extract_validation_metrics(output: str) -> Dict[str, Optional[str]]:
+    return {
+        "Error Matrix": _extract_first_labeled_value(output, ("Error Matrix", "Confusion Matrix")),
+        "Overall Accuracy": _extract_first_labeled_value(output, ("Overall Accuracy", "OA")),
+        "Producers Accuracy": _extract_first_labeled_value(
+            output,
+            ("Producers Accuracy", "Producer Accuracy", "Producer's Accuracy", "Producers' Accuracy", "PA"),
+        ),
+        "Users Accuracy": _extract_first_labeled_value(
+            output,
+            ("Users Accuracy", "User Accuracy", "User's Accuracy", "Users' Accuracy", "Consumers Accuracy", "UA"),
+        ),
+        "Kappa Index": _extract_first_labeled_value(output, ("Kappa Index", "Kappa", "Kappa Coefficient")),
+    }
+
+
+def _format_validation_metrics_for_user(metrics: Dict[str, Optional[str]]) -> str:
+    lines = ["从执行日志直接提取的精度指标："]
+    missing: List[str] = []
+    for label in ("Error Matrix", "Overall Accuracy", "Producers Accuracy", "Users Accuracy", "Kappa Index"):
+        value = metrics.get(label)
+        if value:
+            lines.append(f"- {label}: {value}")
+        else:
+            missing.append(label)
+    if missing:
+        lines.append(
+            "- 缺失指标："
+            + ", ".join(missing)
+            + "。执行日志没有打印这些具体数值，因此不能再笼统说“已计算”。"
+        )
+    return "\n".join(lines)
+
+
 def _capture_gee_product_context(
     *,
     query: str,
@@ -569,6 +1000,7 @@ def _capture_gee_product_context(
         "product_type": product_type,
         "dataset": _extract_logged_value(output, "Dataset"),
         "selected_date": _extract_logged_value(output, "Selected date"),
+        "selected_period": _extract_logged_value(output, "Selected period") or _extract_logged_value(output, "Period"),
         "image_ids": _extract_logged_value(output, "Image IDs") or _extract_logged_value(output, "Source image IDs"),
         "boundary_source": _extract_logged_value(output, "Boundary source"),
         "boundary_names": _extract_logged_value(output, "Boundary names"),
@@ -577,6 +1009,24 @@ def _capture_gee_product_context(
         "code_preview": code[:4000],
     }
     return {k: v for k, v in metadata.items() if v not in (None, "", [])}
+
+
+def _merge_map_layers(
+    existing_layers: Optional[List[Dict[str, Any]]],
+    new_layers: Optional[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    seen: Dict[tuple[str, str], int] = {}
+    for layer in (existing_layers or []) + (new_layers or []):
+        if not isinstance(layer, dict):
+            continue
+        key = (str(layer.get("name") or ""), str(layer.get("tile_url") or ""))
+        if key in seen:
+            merged[seen[key]] = layer
+            continue
+        seen[key] = len(merged)
+        merged.append(layer)
+    return merged
 
 
 def _prepare_aoi_boundary_context(state: WorkflowState) -> Optional[str]:
@@ -590,10 +1040,17 @@ def _prepare_aoi_boundary_context(state: WorkflowState) -> Optional[str]:
     if _extract_asset_ids(state["query"]):
         return None
 
+    had_pending_candidates = bool(state["context"].get("aoi_boundary_candidates"))
+    pending_reply = _consume_pending_boundary_choice(state)
+    if pending_reply is not None:
+        return pending_reply
+    if had_pending_candidates and state["context"].get("aoi_boundary"):
+        return None
+
     existing = state["context"].get("aoi_boundary") or {}
     place_name = _extract_aoi_place_name(state["query"])
     if not place_name:
-        if existing:
+        if existing and (_query_refers_to_previous_product(state["query"]) or _query_is_visual_followup(state["query"]) or not _extract_dataset_hints(state["query"])):
             # Follow-up turns like "根据刚刚生成的影像计算 NDVI" should reuse
             # the previous AOI instead of treating the sentence prefix as a
             # new place name.
@@ -636,10 +1093,17 @@ def _prepare_aoi_boundary_context(state: WorkflowState) -> Optional[str]:
         )
 
     state["context"]["aoi_boundary"] = resolved
+    state["context"].pop("aoi_boundary_candidates", None)
     return None
 
 
-def _static_code_sanity_error(code: str, query: str = "") -> Optional[str]:
+def _static_code_sanity_error(
+    code: str,
+    query: str = "",
+    *,
+    step_description: str = "",
+    aoi_boundary_asset_id: Optional[str] = None,
+) -> Optional[str]:
     """
     Fast pre-exec sanity guard for common GEE type mistakes.
     Returns a synthetic error string when static pattern is clearly invalid.
@@ -670,6 +1134,57 @@ def _static_code_sanity_error(code: str, query: str = "") -> Optional[str]:
             return (
                 f"StaticTypeError: `{var_name}` is ee.FeatureCollection but used with "
                 "an image-only method (.mosaic/.median/.qualityMosaic)."
+            )
+
+    desc = (step_description or "").lower()
+    validation_step_terms = (
+        "validate",
+        "error matrix",
+        "accuracy",
+        "kappa",
+        "精度",
+        "误差矩阵",
+        "混淆矩阵",
+    )
+    q2_only_terms = (
+        "study site",
+        "training sample",
+        "validation sample",
+        "construct samples",
+        "select district",
+        "研究区",
+        "训练样本",
+        "验证样本",
+        "样本构建",
+    )
+    looks_like_q2_only_step = any(term in desc for term in q2_only_terms) and not any(
+        term in desc for term in validation_step_terms
+    )
+    if _query_asks_for_validation_metrics(query) and not looks_like_q2_only_step:
+        required_metric_labels = (
+            "Error Matrix:",
+            "Overall Accuracy:",
+            "Producers Accuracy:",
+            "Users Accuracy:",
+            "Kappa Index:",
+        )
+        missing_labels = [label for label in required_metric_labels if label not in code]
+        if missing_labels:
+            return (
+                "StaticValidationLoggingError: validation workflows must print concrete values with exact labels "
+                f"{', '.join(required_metric_labels)}. Missing labels: {', '.join(missing_labels)}."
+            )
+        if "errorMatrix" not in code and ".errorMatrix(" not in code:
+            return (
+                "StaticValidationError: Q3 must compute an Earth Engine error matrix with "
+                "`validated.errorMatrix(actual=..., predicted=...)`."
+            )
+        if not re.search(r"actual\s*=\s*([\"'])map_class\1", code) or not re.search(
+            r"predicted\s*=\s*([\"'])pred\1", code
+        ):
+            return (
+                "StaticValidationError: for samples_LUMHK, use the land utilization map sampled value as "
+                "`actual='map_class'` and the sample prediction field as `predicted='pred'`."
             )
 
     # Sentinel-2 annual cloudless workflows can exceed memory if implemented with
@@ -726,6 +1241,107 @@ def _static_code_sanity_error(code: str, query: str = "") -> Optional[str]:
                 "a bounded candidate subset before the per-date aggregation."
             )
 
+    if _query_uses_landsat(query) and _query_expects_map_layer(query):
+        uses_landsat_c2 = bool(
+            re.search(r"LANDSAT/LC0[89]/C02/T1_L2", code)
+            or re.search(r"landsat", code, flags=re.IGNORECASE)
+        )
+        uses_single_scene_first = bool(
+            re.search(r"\.sort\(\s*([\"'])CLOUD_COVER\1\s*\)\s*\.first\(\s*\)", code)
+            or re.search(r"ee\.Image\(\s*[^)]*\.first\(\s*\)\s*\)", code, flags=re.DOTALL)
+            or ("CLOUD_COVER" in code and "Map.addLayer" in code and ".first()" in code)
+        )
+        uses_collection_composite = bool(
+            re.search(r"\.(median|mosaic|qualityMosaic)\s*\(", code)
+            or re.search(r"\.map\([^)]*\)\s*\.median\(\s*\)", code, flags=re.DOTALL)
+        )
+        if uses_landsat_c2 and uses_single_scene_first and not uses_collection_composite:
+            return (
+                "StaticCoverageError: Landsat single-scene `.first()` products do not reliably cover the full AOI "
+                "(Hong Kong is often split by Landsat path/row footprints). Build a bounded ImageCollection "
+                "composite/mosaic instead: filterBounds(aoi), sort('CLOUD_COVER').limit(30), apply Landsat scale "
+                "factors, then median() or mosaic() and clipToCollection(aoi_fc) before Map.addLayer."
+            )
+        if _query_asks_for_imagery_product(query):
+            has_temporal_diag = ("Selected date:" in code) or ("Selected period:" in code)
+            required_imagery_labels = (
+                "Dataset:",
+                "Candidate count:",
+                "Boundary source:",
+                "Boundary names:",
+            )
+            missing_imagery_labels = [label.rstrip(":") for label in required_imagery_labels if label not in code]
+            if missing_imagery_labels or not has_temporal_diag:
+                return (
+                    "StaticLoggingError: Landsat imagery outputs must print Dataset, Selected date or Selected period, "
+                    "Candidate count, Boundary source, and Boundary names so the final reply is as detailed as the "
+                    "Sentinel-2 workflow."
+                )
+        if _query_asks_for_uhi(query):
+            if "ST_B10" not in code:
+                return (
+                    "StaticUHIError: Landsat UHI/LST must use the Collection 2 Level 2 thermal band ST_B10, "
+                    "not RGB/SR bands or Sentinel-2 reflectance bands."
+                )
+            if "0.00341802" not in code or "273.15" not in code:
+                return (
+                    "StaticUHIError: Landsat ST_B10 must be converted to Celsius with "
+                    "`ST_B10 * 0.00341802 + 149.0 - 273.15` before computing UHI intensity."
+                )
+            has_uhi_masks = (
+                ("urbanMask" in code or "urban_mask" in code)
+                and ("ruralMask" in code or "rural_mask" in code)
+            )
+            has_uhi_summary_labels = all(
+                label in code
+                for label in (
+                    "urban_pixel_count",
+                    "rural_pixel_count",
+                    "urban_mean_temp_c",
+                    "rural_mean_temp_c",
+                    "uhi_intensity_c",
+                )
+            )
+            has_uhi_difference = bool(
+                re.search(r"\.subtract\(\s*ee\.Number\(\s*(ruralMean|rural_mean|rural_lst)", code)
+                or re.search(r"\buhi(_intensity)?\b\s*=", code, flags=re.IGNORECASE)
+            )
+            builds_uhi_image = bool(
+                re.search(r"rename\(\s*([\"'])uhi", code, flags=re.IGNORECASE)
+                or re.search(r"\buhi(_intensity|_image)?\b\s*=", code, flags=re.IGNORECASE)
+                or re.search(r"Map\.addLayer\(\s*[^,]*subtract\(", code, flags=re.IGNORECASE | re.DOTALL)
+            )
+            has_uhi_logging = (
+                ("Dataset:" in code)
+                and (("Selected date:" in code) or ("Selected period:" in code))
+                and ("Candidate count:" in code)
+                and ("Boundary source:" in code)
+                and ("Boundary names:" in code)
+                and ("selected_band" in code)
+                and ("temp_unit" in code)
+            )
+            if not has_uhi_masks:
+                return (
+                    "StaticUHIError: UHI intensity must define explicit urban and rural masks before temperature "
+                    "reduction; raw LST alone is not a heat-island result."
+                )
+            if not has_uhi_summary_labels or not has_uhi_difference:
+                return (
+                    "StaticUHIError: UHI output must include urban_pixel_count, rural_pixel_count, urban_mean_temp_c, "
+                    "rural_mean_temp_c, and uhi_intensity_c = urban_mean_temp_c - rural_mean_temp_c."
+                )
+            if not has_uhi_logging:
+                return (
+                    "StaticUHIError: UHI runs must print Dataset, Selected period/date, Candidate count, Boundary "
+                    "source, Boundary names, selected_band, temp_unit, urban_pixel_count, rural_pixel_count, "
+                    "urban_mean_temp_c, rural_mean_temp_c, and uhi_intensity_c."
+                )
+            if _query_expects_map_layer(query) and not builds_uhi_image:
+                return (
+                    "StaticUHIError: when the user asks for UHI visualization, Map.addLayer must show a UHI intensity "
+                    "ee.Image (for example temp_c minus rural mean), not only a raw LST heatmap."
+                )
+
     # Intent guard: do not add NDVI unless the user asked for it.
     code_mentions_ndvi = bool(
         re.search(r"(?mi)^\s*ndvi\s*=", code)
@@ -744,11 +1360,17 @@ def _static_code_sanity_error(code: str, query: str = "") -> Optional[str]:
     uses_bbox = ("Geometry.BBox(" in code) or ("Geometry.Rectangle(" in code)
     uses_osm_helper = ("load_aoi_boundary" in code) or ("osm_hk_boundary" in code)
     uses_lsib = "USDOS/LSIB/2017" in code
-    uses_hk_boundary_fc = uses_osm_helper or uses_lsib or ("FAO/GAUL/2015/level0" in code)
-    if mentions_hk and not (uses_osm_helper or uses_lsib):
+    uses_explicit_boundary_asset = False
+    if aoi_boundary_asset_id:
+        explicit_pattern = re.compile(
+            rf"ee\.FeatureCollection\(\s*([\"']){re.escape(aoi_boundary_asset_id)}\1\s*\)"
+        )
+        uses_explicit_boundary_asset = bool(explicit_pattern.search(code))
+    uses_hk_boundary_fc = uses_osm_helper or uses_lsib or uses_explicit_boundary_asset or ("FAO/GAUL/2015/level0" in code)
+    if mentions_hk and not uses_hk_boundary_fc:
         return (
-            "StaticAOIError: Hong Kong task must use load_aoi_boundary() / osm_hk_boundary() first, "
-            "or USDOS/LSIB/2017 as fallback with COUNTRY_NA matching."
+            "StaticAOIError: Hong Kong task must use an explicit Hong Kong boundary asset, "
+            "load_aoi_boundary() / osm_hk_boundary(), or USDOS/LSIB/2017 as fallback with COUNTRY_NA matching."
         )
     if mentions_hk and uses_lsib and not uses_osm_helper:
         has_lsib_contains_fallback = (
@@ -798,9 +1420,13 @@ def _execute_with_static_guard(
     code: str,
     query: str = "",
     *,
+    step_description: str = "",
     aoi_boundary_path: Optional[str] = None,
+    aoi_boundary_asset_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     expects_map_layer = _query_expects_map_layer(query)
+    if aoi_boundary_asset_id and not aoi_boundary_path:
+        code = _replace_load_aoi_boundary_with_asset_fc(code, aoi_boundary_asset_id)
     if aoi_boundary_path and "load_aoi_boundary" not in code:
         return {
             "status": "error",
@@ -813,6 +1439,24 @@ def _execute_with_static_guard(
             "tile_url": None,
             "layers": [],
         }
+    if aoi_boundary_path and expects_map_layer:
+        clips_to_aoi = bool(
+            re.search(r"\.clipToCollection\(\s*aoi_fc\s*\)", code)
+            or re.search(r"\.clip\(\s*aoi_fc\.geometry\(\)\s*\)", code)
+            or re.search(r"\.clip\(\s*aoi\s*\)", code)
+        )
+        if not clips_to_aoi:
+            return {
+                "status": "error",
+                "log": (
+                    "[前置本地静态检查拦截，未实际执行 GEE] "
+                    "StaticAOIClipError: this imagery request already has a resolved AOI boundary cache. "
+                    "Generated code must clip the final imagery to that AOI, for example "
+                    "`image.clipToCollection(aoi_fc)` or `image.clip(aoi)`."
+                ),
+                "tile_url": None,
+                "layers": [],
+            }
     if expects_map_layer and "Map.addLayer" not in code:
         return {
             "status": "error",
@@ -824,7 +1468,12 @@ def _execute_with_static_guard(
             "tile_url": None,
             "layers": [],
         }
-    static_error = _static_code_sanity_error(code, query=query)
+    static_error = _static_code_sanity_error(
+        code,
+        query=query,
+        step_description=step_description,
+        aoi_boundary_asset_id=aoi_boundary_asset_id,
+    )
     if static_error:
         # Prefix marker so downstream (repair LLM, summarize LLM) knows this is a
         # PRE-EXECUTION local guard hit, not a real Earth Engine runtime error.
@@ -938,7 +1587,7 @@ def _build_prev_steps_section(steps: List[StepResult]) -> str:
     return "\n\n".join(lines)
 
 
-def _build_context_section(context: Dict[str, Any]) -> str:
+def _build_context_section(context: Dict[str, Any], *, query: str = "") -> str:
     """将 state.context 格式化为 CODE_GEN_PROMPT 中的上下文描述段落。
 
     支持多 asset：context["assets"] 是以 asset_id 为 key 的字典，
@@ -947,6 +1596,7 @@ def _build_context_section(context: Dict[str, Any]) -> str:
     assets: Dict[str, Any] = context.get("assets") or {}
     aoi_boundary: Dict[str, Any] = context.get("aoi_boundary") or {}
     last_product: Dict[str, Any] = context.get("last_gee_product") or {}
+    explicit_boundary_asset_id = _pick_explicit_aoi_boundary_asset_id(context, query=query)
     if not assets and not aoi_boundary and not last_product:
         return ""
 
@@ -960,6 +1610,15 @@ def _build_context_section(context: Dict[str, Any]) -> str:
         lines.append("    - 代码中必须调用预注入 helper：aoi_fc = load_aoi_boundary()")
         lines.append("    - 用 aoi_fc.geometry() 做 filterBounds；最终显示裁剪用 image.clipToCollection(aoi_fc)")
         lines.append("    - 覆盖率/面积计算可用 aoi_fc.geometry().simplify(100) 后再 transform 到 EPSG:3857")
+    elif explicit_boundary_asset_id:
+        lines.append("  AOI 边界：用户已显式提供 GEE FeatureCollection asset")
+        lines.append(f"    - 首选 AOI Asset：{explicit_boundary_asset_id}")
+        lines.append(
+            "    - 本任务不要调用 load_aoi_boundary()；直接写："
+            f"aoi_fc = ee.FeatureCollection({json.dumps(explicit_boundary_asset_id, ensure_ascii=False)})"
+        )
+        lines.append("    - 用 aoi_fc.geometry() 做 filterBounds；若有地图图层，最终显示优先 image.clipToCollection(aoi_fc)")
+        lines.append("    - 若任务是 district-level 统计/抽样/精度验证，应直接基于该 FeatureCollection 做分区统计，不要再猜测 OSM AOI")
 
     if last_product:
         lines.append("  上一轮可复用遥感产品（用于“根据刚刚/这张/上一张影像”类追问）：")
@@ -969,18 +1628,24 @@ def _build_context_section(context: Dict[str, Any]) -> str:
             lines.append(f"    - Dataset：{last_product.get('dataset')}")
         if last_product.get("selected_date"):
             lines.append(f"    - Selected date：{last_product.get('selected_date')}")
+        if last_product.get("selected_period"):
+            lines.append(f"    - Selected period：{last_product.get('selected_period')}")
         if last_product.get("image_ids"):
             lines.append(f"    - Image IDs：{last_product.get('image_ids')}")
         if last_product.get("layer_names"):
             lines.append(f"    - 图层名：{last_product.get('layer_names')}")
         if last_product.get("output_preview"):
             lines.append(f"    - 上一轮输出摘要：{last_product.get('output_preview')[:1200]}")
-        lines.append("    - 若用户要求基于上一轮影像计算 NDVI，必须优先复用上述 Dataset/Image IDs/Selected date 重建影像。")
+        lines.append("    - 若用户要求基于上一轮影像计算 NDVI/NDBI 等指数，必须优先复用上述 Dataset/Image IDs/Selected date 重建影像。")
+        if str(last_product.get("dataset") or "").upper().startswith("LANDSAT"):
+            lines.append("    - Landsat 上一轮影像若来自多景合成，后续指数也必须重建同一集合合成后再计算，避免退回单景 first()。")
 
     if assets:
         lines.append("  已检查的 GEE asset 元数据：")
     for aid, meta in assets.items():
         lines.append(f"  Asset: {aid}")
+        if aid == explicit_boundary_asset_id:
+            lines.append("    - 这是本任务优先使用的 AOI / district boundary asset")
         if meta.get("bands"):
             lines.append(f"    - 波段列表：{meta['bands']}")
         if meta.get("property_names"):
@@ -1001,12 +1666,17 @@ def _build_session_section(state: WorkflowState) -> str:
 
     sc = state.get("session_context") or {}
     current_aoi = (state.get("context") or {}).get("aoi_boundary") or {}
+    query_place = _extract_aoi_place_name(state.get("query", ""))
     if current_aoi:
         parts.append(
             "当前任务 AOI 边界已解析："
             f"{current_aoi.get('place_name')} -> {current_aoi.get('display_name')} "
             f"({current_aoi.get('osm_type')} {current_aoi.get('osm_id')})"
         )
+    if query_place and current_aoi and not _query_refers_to_previous_product(state.get("query", "")):
+        current_place = str(current_aoi.get("place_name") or "").strip().lower()
+        if current_place == query_place.strip().lower():
+            parts.append(f"本轮 query 明确指定 AOI 为 {query_place}，不要沿用上一轮影像范围。")
 
     map_ctx = sc.get("map_context") or {}
     if map_ctx.get("center_lat") and map_ctx.get("center_lon"):
@@ -1021,6 +1691,9 @@ def _build_session_section(state: WorkflowState) -> str:
         parts.append(f"上一轮用户请求：{last_q[:120]}")
     if last_r:
         parts.append(f"上一轮助手回复摘要：{last_r[:200]}")
+
+    if current_aoi and _query_refers_to_previous_product(state.get("query", "")):
+        parts.append("本轮请求更像是在继续复用上一轮影像/图层效果，而不是切换新的 AOI。")
 
     asset_id = sc.get("asset_id")
     if asset_id:
@@ -1149,7 +1822,7 @@ async def _execute_step(
         result["tool"] = "gee_executor"
 
         # Think：LLM 生成代码，注入从 inspect 步骤获得的 context、前序步骤输出和 session context
-        context_section = _build_context_section(state["context"])
+        context_section = _build_context_section(state["context"], query=state["query"])
         prev_steps_section = _build_prev_steps_section(state["steps"])
         session_section = _build_session_section(state)
 
@@ -1183,34 +1856,54 @@ async def _execute_step(
         else:
             code = _normalize_code_asset_ids(code_blocks[-1].strip())
             aoi_boundary_path = (state["context"].get("aoi_boundary") or {}).get("cache_path")
+            aoi_boundary_asset_id = _pick_explicit_aoi_boundary_asset_id(state["context"], query=state["query"])
 
             # Act：执行代码（含 repair 子循环，最多重试 3 次）
             MAX_REPAIR_ATTEMPTS = 3
             exec_result = _execute_with_static_guard(
                 code,
                 query=state["query"],
+                step_description=description,
                 aoi_boundary_path=aoi_boundary_path,
+                aoi_boundary_asset_id=aoi_boundary_asset_id,
             )
             if exec_result["status"] != "ok":
-                autofixed_code = _autofix_common_code_errors(code, exec_result.get("log", ""))
+                autofixed_code = _autofix_common_code_errors(
+                    code,
+                    exec_result.get("log", ""),
+                    aoi_boundary_asset_id=aoi_boundary_asset_id,
+                )
                 if autofixed_code != code:
                     code = autofixed_code
                     exec_result = _execute_with_static_guard(
                         code,
                         query=state["query"],
+                        step_description=description,
                         aoi_boundary_path=aoi_boundary_path,
+                        aoi_boundary_asset_id=aoi_boundary_asset_id,
                     )
             for attempt in range(1, MAX_REPAIR_ATTEMPTS + 1):
                 if exec_result["status"] == "ok":
                     break
-                error_log = exec_result.get("log", "")
+                error_log = str(exec_result.get("log", ""))
+                if len(error_log) > 12_000:
+                    error_log = (
+                        error_log[:12_000]
+                        + f"\n...[repair error log truncated: removed {len(error_log) - 12_000:,} characters]..."
+                    )
+                original_code_for_repair = code
+                if len(original_code_for_repair) > 50_000:
+                    original_code_for_repair = (
+                        original_code_for_repair[:50_000]
+                        + "\n# ... original code truncated for repair prompt ..."
+                    )
                 repair_prompt = CODE_REPAIR_PROMPT.format(
                         query=state["query"],
                         step_description=description,
                         context_section=context_section,
                         kb_section=kb_section,
                         prev_steps_section=prev_steps_section,
-                        original_code=code,
+                        original_code=original_code_for_repair,
                         error_log=error_log,
                         attempt=attempt,
                     )
@@ -1224,7 +1917,9 @@ async def _execute_step(
                 exec_result = _execute_with_static_guard(
                     code,
                     query=state["query"],
+                    step_description=description,
                     aoi_boundary_path=aoi_boundary_path,
+                    aoi_boundary_asset_id=aoi_boundary_asset_id,
                 )
 
             result["output"] = exec_result.get("log", "")
@@ -1247,6 +1942,8 @@ async def _execute_step(
                 map_ctx = _map_context_from_aoi_boundary(state["context"])
                 if not map_ctx:
                     map_ctx = (state.get("session_context") or {}).get("map_context") or {}
+                previous_map_update = state.get("map_update") or {}
+                merged_layers = _merge_map_layers(previous_map_update.get("layers"), all_layers)
                 center_lat = map_ctx.get("center_lat") or DEFAULT_CENTER_LAT
                 center_lon = map_ctx.get("center_lon") or DEFAULT_CENTER_LON
                 zoom = map_ctx.get("zoom") or DEFAULT_ZOOM
@@ -1254,9 +1951,9 @@ async def _execute_step(
                     "center_lat": center_lat,
                     "center_lon": center_lon,
                     "zoom": zoom,
-                    "bbox": map_ctx.get("bbox"),
+                    "bbox": map_ctx.get("bbox") or previous_map_update.get("bbox"),
                     "layer_info": {"tile_url": exec_result.get("tile_url")},
-                    "layers": all_layers,
+                    "layers": merged_layers,
                 }
 
     state["steps"].append(result)
@@ -1271,16 +1968,47 @@ async def _summarize(state: WorkflowState) -> WorkflowState:
     """
     state["status"] = "summarizing"
 
+    def _step_output_preview(value: Any, limit: int = 6_000) -> str:
+        text = str(value or "")
+        if len(text) <= limit:
+            return text
+        return text[:limit] + f"\n...[step output truncated: removed {len(text) - limit:,} characters]..."
+
     steps_summary = "\n\n".join(
-        f"**步骤 {s['step_index'] + 1}（{s['description']}）** [工具: {s['tool']}]：\n{s['output']}"
+        f"**步骤 {s['step_index'] + 1}（{s['description']}）** [工具: {s['tool']}]：\n"
+        f"{_step_output_preview(s.get('output'))}"
         for s in state["steps"]
     )
+    joined_outputs = "\n".join(str(s.get("output") or "") for s in state["steps"])
+    validation_metric_reply = ""
+    if _query_asks_for_validation_metrics(state.get("query", "")):
+        validation_metrics = _extract_validation_metrics(joined_outputs)
+        validation_metric_reply = _format_validation_metrics_for_user(validation_metrics)
+        steps_summary = (
+            "[Deterministic validation metric extraction]\n"
+            + validation_metric_reply
+            + "\n\n请优先逐项复述以上精度指标；不要用“已计算/如日志所示”代替具体数值。\n\n"
+            + steps_summary
+        )
+    if _query_asks_for_uhi(state.get("query", "")):
+        has_uhi_markers = all(
+            marker in joined_outputs
+            for marker in ("urban_mean_temp_c", "rural_mean_temp_c", "uhi_intensity_c")
+        )
+        if not has_uhi_markers:
+            steps_summary = (
+                "[Deterministic summary note] 本轮执行日志中没有同时出现 urban_mean_temp_c / rural_mean_temp_c / "
+                "uhi_intensity_c，这不能视为完整的 UHI 强度结果；若只有 LST 温度层或温度统计，应明确说明“这是 LST，不是 UHI intensity”。\n\n"
+                + steps_summary
+            )
 
     prompt = SUMMARIZE_PROMPT.format(
         query=state["query"],
         steps_summary=steps_summary,
     )
     state["final_reply"] = await llm_client.chat_with_llm(prompt)
+    if validation_metric_reply:
+        state["final_reply"] = validation_metric_reply + "\n\n" + state["final_reply"]
     state["status"] = "terminated"
     return state
 
@@ -1361,7 +2089,10 @@ async def run_workflow(
 
     # ── 1. routing ────────────────────────────────────────────────────────
     state["status"] = "routing"
-    state["intent"] = await classify_intent(query)
+    if _looks_like_pending_boundary_clarification(query, state["context"]):
+        state["intent"] = "execution"
+    else:
+        state["intent"] = await classify_intent(query)
 
     # 知识问答：走检索增强的单步回答，不进入多步执行工作流
     if state["intent"] == "knowledge":
@@ -1524,7 +2255,10 @@ async def stream_workflow(
     try:
         # ── 1. routing ────────────────────────────────────────────────────
         state["status"] = "routing"
-        state["intent"] = await classify_intent(query)
+        if _looks_like_pending_boundary_clarification(query, state["context"]):
+            state["intent"] = "execution"
+        else:
+            state["intent"] = await classify_intent(query)
         yield _evt("routing", {"intent": state["intent"]})
 
         # 知识问答：走检索增强的单步回答

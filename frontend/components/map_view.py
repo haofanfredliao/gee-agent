@@ -239,6 +239,16 @@ def _format_label(value: Any) -> str:
     return f"{num:.2f}".rstrip("0").rstrip(".")
 
 
+def _layer_opacity(layer: Dict[str, Any]) -> float:
+    try:
+        value = float(layer.get("opacity", 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+    if value <= 0:
+        return 1.0
+    return max(0.15, min(1.0, value))
+
+
 def _fallback_vis_from_name(name: str) -> Dict[str, Any]:
     upper = (name or "").upper()
     if "LAI" in upper or "叶面积" in name:
@@ -307,9 +317,10 @@ def render_map(
                     name=layer.get("name", f"GEE 图层 {i + 1}"),
                     overlay=True,
                     control=True,
+                    show=True,
                     tms=False,
                     no_wrap=True,
-                    opacity=float(layer.get("opacity", 1.0)),
+                    opacity=_layer_opacity(layer),
                 ).add_to(m)
         folium.LayerControl(collapsed=True, position="topright").add_to(m)
 

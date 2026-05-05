@@ -104,7 +104,8 @@ Critical rules (must follow):
    `projects/ee-hku-geog7310/assets/Hong_Kong_District_Boundary`.
    Do not silently switch to GAUL unless primary asset inspection/loading fails and fallback is explicitly logged.
 3) Define urban and non-urban masks transparently, then compute urban-rural temperature difference.
-4) Output numeric UHI indicators only; no interactive map dependency.
+4) If the user asks to show / map / visualize the result, create a UHI intensity ee.Image layer and call Map.addLayer on that UHI layer.
+   Do not visualize raw LST alone and call it "UHI".
 5) Do not present this as generic LST retrieval case; emphasize UHI intensity interpretation.
 6) If auxiliary land-cover mask is unavailable, state fallback rule and uncertainty.
 7) Before fixing endDate, inspect collection availability and cap to the latest complete period available in the dataset.
@@ -128,6 +129,10 @@ Critical rules (must follow):
 15) Plausibility guard for Hong Kong summer windows:
     if derived mean temperature is far outside a reasonable range (for example `< -5°C` or `> 50°C`),
     emit `WARN_SUSPECT_TEMP_SCALING` and avoid presenting the value as trusted final output.
+16) Landsat/UHI logging hard gate:
+    always print `Dataset`, `Selected period` (or `Selected date`), `Candidate count`, `Boundary source`, `Boundary names`,
+    `selected_band`, `temp_unit`, `urban_pixel_count`, `rural_pixel_count`, `urban_mean_temp_c`, `rural_mean_temp_c`,
+    and `uhi_intensity_c` so the final reply can be specific rather than generic.
 
 Do-Not Rules (strictly prohibited):
 1) Do not bypass the confirmed Hong Kong district boundary asset by forcing GAUL as primary for Hong Kong district tasks.
@@ -151,8 +156,10 @@ Minimal runnable path:
 - Resolve AOI with multilingual district alias normalization, then validate with `candidate_count/final_count` diagnostics.
 - Create Landsat thermal composite, apply QA cloud mask, and convert to Celsius with official L2 formula.
 - Build urban/rural masks from a public land-cover source.
+- Print Landsat diagnostics: Dataset, Selected period/date, Candidate count, Boundary source, Boundary names, selected_band, temp_unit.
 - Compute and print `urban_pixel_count/rural_pixel_count`; hard-block if either class is insufficient.
 - Reduce temperature over valid masks and compute UHI intensity summary only when all hard gates pass.
+- If visualization is requested, add a UHI intensity layer (`temp_c - rural_mean_temp_c`) instead of raw LST.
 
 Hong Kong district AOI resolve snippet (must pass before thermal stats):
 ```javascript
@@ -199,6 +206,14 @@ var l8 = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
   .filterBounds(aoi)
   .filterDate(startDate, endDate)
   .map(maskL8L2);
+
+print('Dataset', 'LANDSAT/LC08/C02/T1_L2');
+print('Selected period', startDate + ' to ' + endDate);
+print('Candidate count', l8.size());
+print('Boundary source', 'user_aoi_or_resolved_boundary');
+print('Boundary names', ['user_aoi']);
+print('selected_band', 'ST_B10');
+print('temp_unit', 'Celsius');
 
 var thermal = l8.mean()
   .select('ST_B10')
@@ -254,15 +269,23 @@ var uhi = ee.Algorithms.If(
   null
 );
 
+var uhiImage = ee.Image(ee.Algorithms.If(
+  enoughSamples,
+  thermal.subtract(ee.Number(ruralMean)).rename('uhi_intensity_c').clip(aoi),
+  ee.Image.constant(0).rename('uhi_intensity_c').updateMask(ee.Image.constant(0))
+));
+
 print('blocked_status', ee.Algorithms.If(enoughSamples, 'OK', 'BLOCKED_INSUFFICIENT_SAMPLES'));
 print('insufficient_class', blockedClass);
 print('urban_mean_temp_c', urbanMean);
 print('rural_mean_temp_c', ruralMean);
 print('uhi_intensity_c', uhi);
+Map.addLayer(uhiImage, {min: -5, max: 5, palette: ['#313695', '#74add1', '#ffffbf', '#f46d43', '#a50026']}, 'UHI intensity (C)');
 ```
 
 Expected output:
 - UHI summary report (urban mean, rural mean, intensity difference, period metadata)
+- When visualization is requested, a UHI intensity layer rather than a raw LST layer
 
 Failure modes:
 - Ignoring L2 thermal scaling and unit conversion causes invalid temperature values.

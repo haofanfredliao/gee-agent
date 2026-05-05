@@ -30,6 +30,31 @@ except ImportError:
     openai = None
 
 POE_BASE_URL = "https://api.poe.com/v1"
+DEFAULT_MAX_PROMPT_CHARS = 180_000
+DEFAULT_LOG_PROMPT_CHARS = 12_000
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def compact_prompt_for_llm(prompt: str, max_chars: Optional[int] = None) -> str:
+    """Keep LLM requests safely below provider token limits while preserving task rules."""
+    prompt = prompt or ""
+    limit = max_chars or _env_int("LLM_MAX_PROMPT_CHARS", DEFAULT_MAX_PROMPT_CHARS)
+    if limit <= 0 or len(prompt) <= limit:
+        return prompt
+
+    marker = (
+        "\n\n[... prompt compacted by gee-agent: "
+        f"removed {len(prompt) - limit:,} middle characters to stay below the LLM input limit ...]\n\n"
+    )
+    head_budget = max(1, int(limit * 0.68))
+    tail_budget = max(1, limit - head_budget - len(marker))
+    return prompt[:head_budget] + marker + prompt[-tail_budget:]
 
 
 def _get_model_config() -> dict:
@@ -62,7 +87,15 @@ async def chat_with_llm(prompt: str, model_name: Optional[str] = None) -> str:
     每次调用均记录输入摘要、输出摘要与耗时到 gee_agent.llm logger。
     """
     model_id = _resolve_model_id(model_name)
-    _log.debug("[LLM INPUT] model=%s  prompt(%d chars):\n%s", model_id, len(prompt), prompt)
+    safe_prompt = compact_prompt_for_llm(prompt)
+    log_limit = _env_int("LLM_LOG_PROMPT_CHARS", DEFAULT_LOG_PROMPT_CHARS)
+    log_prompt = compact_prompt_for_llm(safe_prompt, max_chars=log_limit)
+    if len(safe_prompt) < len(prompt or ""):
+        _log.warning(
+            "[LLM INPUT COMPACTED] model=%s  original=%d chars  sent=%d chars",
+            model_id, len(prompt or ""), len(safe_prompt),
+        )
+    _log.debug("[LLM INPUT] model=%s  prompt(%d chars):\n%s", model_id, len(safe_prompt), log_prompt)
 
     api_key = os.environ.get("POE_API_KEY")
     if not api_key:
@@ -89,7 +122,7 @@ async def chat_with_llm(prompt: str, model_name: Optional[str] = None) -> str:
             model=model_id,
             messages=[{
                 "role": "user",
-                "content": prompt
+                "content": safe_prompt
             }]
         )
         text = chat.choices[0].message.content.strip()

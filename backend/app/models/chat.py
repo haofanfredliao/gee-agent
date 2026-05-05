@@ -31,7 +31,7 @@ class ChatRequest(BaseModel):
 
 class WorkflowStatus(BaseModel):
     """工作流执行状态摘要，供前端展示中间状态。"""
-    intent: str                        # "execution" | "knowledge"
+    intent: str                        # "execution" | "knowledge" | "geo_query"
     status: str                        # 最终状态，通常为 "terminated"
     plan: List[str]                    # 各步骤的描述列表
     steps_completed: int

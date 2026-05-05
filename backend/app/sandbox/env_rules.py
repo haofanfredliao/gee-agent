@@ -129,4 +129,21 @@ SANDBOX_CONSTRAINTS_BLOCK = """\
     因为 SANDBOX_CONSTRAINTS_BLOCK 会被拼入 prompt 模板并走 str.format()，会把花括号误当占位符。
 29. 对 NDVI、mosaic、真彩色影像、遥感影像可视化请求，必须调用 Map.addLayer(...) 添加最终 ee.Image 图层。
     如果只 print 结果而没有 Map.addLayer，任务不算完成；NDVI 图层必须使用 NDVI 可视化参数。
+30. Landsat 8/9 对香港、城市或行政区生成影像时，严禁直接显示 `.sort("CLOUD_COVER").first()` 得到的单景影像：
+    单景 Landsat path/row footprint 经常只覆盖 AOI 的一部分，会出现斜边缺口。
+    正确模式是先构建覆盖 AOI 的 ImageCollection，再生成完整 AOI 合成影像：
+      collection = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2").filterBounds(aoi).filterDate(start, end)
+      candidates = collection.sort("CLOUD_COVER").limit(30)
+      scaled = candidates.map(lambda img: img.select(["SR_B4","SR_B3","SR_B2"]).multiply(0.0000275).add(-0.2)
+                              .copyProperties(img, img.propertyNames()))
+      composite = scaled.median().clipToCollection(aoi_fc)
+    若用户明确要求“同一天/单日”，也必须对该日期的所有覆盖 scenes 做 mosaic，而不是只取第一景。
+31. 使用 Landsat 做 UHI/LST 时，必须使用 Collection 2 Level 2 的热红外地表温度波段 `ST_B10`，
+    按 scale factor 转为摄氏度：ST_B10 * 0.00341802 + 149.0 - 273.15。
+    若 query 明确是 UHI / 城市热岛 / heat island intensity，则必须进一步定义 urban mask 与 rural mask，
+    计算 `uhi_intensity = urban_mean_temp_c - rural_mean_temp_c`；不能只输出或可视化 raw LST 就声称完成 UHI。
+    若用户需要地图，UHI 任务的 Map.addLayer 必须显示 UHI intensity ee.Image；纯 LST 任务才显示 LST 图层。
+    Landsat 热力任务还必须 print Dataset、Selected date/Selected period、Candidate count、Boundary source、
+    Boundary names、selected_band、temp_unit、urban_pixel_count、rural_pixel_count、urban_mean_temp_c、
+    rural_mean_temp_c、uhi_intensity_c（纯 LST 任务可不打印后三项 UHI 指标）。
 """

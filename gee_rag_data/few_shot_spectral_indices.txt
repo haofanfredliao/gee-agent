@@ -115,7 +115,7 @@ Critical rules (must follow):
 1) 只有用户明确要求某个指数时才使用本模板；普通真彩色 / mosaic 任务严禁额外添加指数图层。
 2) Observe 用户是否在引用上一轮影像：
    - query 含 "刚刚/刚才/这个/这张/上一张/根据刚刚生成/previous image/last image" -> 优先使用 context 中的 last_gee_product。
-   - 若上一轮输出有 Dataset / Selected date / Image IDs -> Case A：重建上一轮同一张 mosaic 后计算指数。
+   - 若上一轮输出有 Dataset / Selected date / Selected period / Image IDs -> Case A：重建上一轮同一张 mosaic/composite 后计算指数。
    - 若没有上一轮产品 -> Case B：从 query 识别数据源、AOI、时间，重新生成 composite。
 3) 从 query 识别 index_key：
    - 优先识别显式缩写：NDVI, NDBI, NDWI, MNDWI, NDMI, NBR, NBR2, EVI, SAVI, MSAVI, BSI, NDSI, GNDVI, NDRE, LAI。
@@ -158,7 +158,7 @@ Positive ReAct trajectory:
   - 识别 AOI：使用 `load_aoi_boundary()`；不要写死香港/广州/深圳。
   - 识别时间：年份 "2022" -> "2022-01-01" ~ "2023-01-01"。
 - Think:
-  - Case A previous_product：用上一轮 Image IDs / Selected date 重建 mosaic，保证指数和上一张影像同源。
+  - Case A previous_product：用上一轮 Image IDs / Selected date / Selected period 重建 mosaic 或 composite，保证指数和上一张影像同源。
   - Case B fresh_composite：filterBounds + filterDate + sort(cloud_property) + limit(30)，再云掩膜和 median composite。
   - 用 Dataset profile 的 bands + Index profile 的 formula 组合计算。
 - Act:
@@ -177,6 +177,7 @@ source_image_ids = [
     # e.g. "20220409T025551_20220409T030902_T49QGF"
 ]
 selected_date = ""  # e.g. "2022-04-09"; 若 source_image_ids 为空才使用日期 fallback
+selected_period = ""  # e.g. "2024-01-01 to 2025-01-01"; Landsat annual composite may provide period instead of one date
 
 def get_dataset_profile(cid):
     if cid == "COPERNICUS/S2_SR_HARMONIZED":
@@ -276,10 +277,16 @@ if source_image_ids:
 elif selected_date:
     d = ee.Date(selected_date)
     source_col = base.filterDate(d, d.advance(1, "day")).sort(profile["cloud_property"]).limit(30)
+elif selected_period:
+    start_text, end_text = [part.strip() for part in selected_period.split("to", 1)]
+    source_col = base.filterDate(start_text, end_text).sort(profile["cloud_property"]).limit(30)
 else:
-    raise ValueError("Previous product metadata is missing Dataset/Image IDs/Selected date; use fresh_composite mode.")
+    raise ValueError("Previous product metadata is missing Dataset/Image IDs/Selected date/Selected period; use fresh_composite mode.")
 
-mosaic = source_col.mosaic().clipToCollection(aoi_fc)
+if collection_id in ("LANDSAT/LC08/C02/T1_L2", "LANDSAT/LC09/C02/T1_L2") and not source_image_ids and selected_period:
+    mosaic = source_col.median().clipToCollection(aoi_fc)
+else:
+    mosaic = source_col.mosaic().clipToCollection(aoi_fc)
 index_image = compute_index(mosaic, profile, index_key)
 
 print("Index:", index_key)
@@ -287,6 +294,7 @@ print("Index mode: previous_product")
 print("Dataset:", collection_id)
 print("Source image IDs:", source_image_ids)
 print("Selected date:", selected_date)
+print("Selected period:", selected_period)
 print("Boundary source:", boundary_source)
 print("Boundary names:", aoi_fc.aggregate_array("display_name").distinct().getInfo())
 if index_key.upper() == "LAI":
@@ -388,6 +396,7 @@ Anti-patterns to avoid:
 - 用户说“根据刚刚/这张/上一张”时，把“刚刚生成的遥感影像”当作 AOI 去查 Nominatim。
 - 上一轮产品存在时，重新随机选一批影像，导致指数和上一张真彩色图不是同一数据来源。
 - Landsat C2 L2 不做 reflectance_scale 就直接计算指数。
+- Landsat follow-up 退回 `.sort("CLOUD_COVER").first()` 单景，导致 AOI 显示不完整；必须重建上一轮多景合成。
 - EVI/SAVI/LAI 用 S2 原始 0~10000 值计算，导致常数项错误。
 - NDWI 语义混淆：水体 NDWI 默认 Green/NIR；植被水分应叫 NDMI 或 NDWI Gao。
 - Landsat 上硬算 NDRE/RECI。

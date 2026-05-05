@@ -47,6 +47,44 @@ class _MockMap:
         self.tile_url: Optional[str] = None
         self.layers: List[Dict[str, Any]] = []
 
+    @staticmethod
+    def _looks_like_vector_object(ee_object: Any) -> bool:
+        class_name = ee_object.__class__.__name__.lower()
+        return any(token in class_name for token in ("featurecollection", "feature", "geometry"))
+
+    @staticmethod
+    def _color_from_vis(vis_params: Optional[Dict[str, Any]]) -> str:
+        vis = vis_params or {}
+        if isinstance(vis.get("color"), str) and vis.get("color", "").strip():
+            return vis["color"].strip()
+        palette = vis.get("palette")
+        if isinstance(palette, str):
+            first = palette.split(",")[0].strip()
+            if first:
+                return first
+        if isinstance(palette, list):
+            for item in palette:
+                if str(item).strip():
+                    return str(item).strip()
+        return "ff4fa3"
+
+    @classmethod
+    def _vector_paint_config(cls, vis_params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        color = cls._color_from_vis(vis_params)
+        width_raw = (vis_params or {}).get("width", (vis_params or {}).get("pointSize", 4))
+        try:
+            width = max(2, int(float(width_raw)))
+        except (TypeError, ValueError):
+            width = 4
+        return {
+            "width": width,
+            "map_vis": {
+                "min": 0,
+                "max": 1,
+                "palette": ["00000000", color],
+            },
+        }
+
     def addLayer(  # noqa: N802
         self,
         ee_object: Any,
@@ -56,6 +94,8 @@ class _MockMap:
         opacity: float = 1.0,
     ) -> None:
         try:
+            if self._looks_like_vector_object(ee_object):
+                raise AttributeError("vector-layer-rasterize")
             map_id = ee_object.getMapId(vis_params or {})
             url = map_id.get("tile_fetcher").url_format if map_id else None
             if url:
@@ -64,19 +104,21 @@ class _MockMap:
                     "name": name or "layer",
                     "tile_url": url,
                     "opacity": opacity,
+                    "shown": shown,
                     "vis_params": vis_params or {},
                 })
         except AttributeError:
             # ee_object 不是 Image（如 FeatureCollection 或 Feature），用 paint 转换后再取 tile。
             try:
                 import ee as _ee
-                paint_vis = vis_params or {"palette": ["FF0000"]}
+                vector_cfg = self._vector_paint_config(vis_params)
+                paint_vis = vector_cfg["map_vis"]
                 try:
-                    map_id = _ee.Image().paint(ee_object, 1).getMapId(paint_vis)
+                    map_id = _ee.Image().byte().paint(ee_object, 1, vector_cfg["width"]).getMapId(paint_vis)
                 except Exception:
                     # ee_object 是 Feature，需先包装成 FeatureCollection
-                    map_id = _ee.Image().paint(
-                        _ee.FeatureCollection([ee_object]), 1
+                    map_id = _ee.Image().byte().paint(
+                        _ee.FeatureCollection([ee_object]), 1, vector_cfg["width"]
                     ).getMapId(paint_vis)
                 url = map_id.get("tile_fetcher").url_format if map_id else None
                 if url:
@@ -85,6 +127,7 @@ class _MockMap:
                         "name": name or "layer",
                         "tile_url": url,
                         "opacity": opacity,
+                        "shown": shown,
                         "vis_params": paint_vis,
                     })
             except Exception as err2:

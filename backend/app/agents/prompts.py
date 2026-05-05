@@ -122,6 +122,13 @@ SUMMARIZE_PROMPT = """\
 - 数据集的主要特征（属性字段、要素数量、几何类型等）
 - 分析计算的核心结论（如区域数量、面积分布等）
 - 如已添加可视化图层，简要说明
+- 对影像/热力任务，如果日志里出现 Dataset、Selected date、Selected period、Candidate count、Image IDs、Boundary source、Boundary names，
+  必须尽量逐项写出来，不要泛化成“已完成筛选/处理”。
+- 对 UHI 任务，只有当日志中明确出现 urban_mean_temp_c、rural_mean_temp_c、uhi_intensity_c 时，才能称为“完成 UHI 强度计算”；
+  如果只有 LST / 地表温度图层或温度统计，必须明确说明“这是 LST，不是完整的 UHI intensity”。
+- 对精度验证 / error matrix / kappa 任务，如果执行记录里出现 Error Matrix、Overall Accuracy、Producers Accuracy、
+  Users Accuracy、Kappa Index，必须直接列出这些具体值；不得只说“已计算”“如日志所示”。
+  如果这些标签没有具体值，必须明确说执行日志缺少具体数值。
 - 严格依据步骤记录判断成功/失败：如果步骤失败，或输出中包含 error、StaticVisualizationError、未生成 tile、layers 为空，
   不得声称“已成功添加图层”或“已完成可视化”，应明确说明未生成地图图层。
 

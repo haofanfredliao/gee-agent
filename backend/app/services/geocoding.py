@@ -72,8 +72,12 @@ def _fallback_places() -> Dict[str, Tuple[float, float, List[float]]]:
     return {
         "香港": (22.3193, 114.1694, [114.0, 22.2, 114.4, 22.5]),
         "hong kong": (22.3193, 114.1694, [114.0, 22.2, 114.4, 22.5]),
+        "香港岛": (22.2470, 114.1730, [114.104, 22.212, 114.261, 22.285]),
+        "hong kong island": (22.2470, 114.1730, [114.104, 22.212, 114.261, 22.285]),
         "九龙": (22.3120, 114.1740, [114.15, 22.28, 114.25, 22.35]),
         "kowloon": (22.3120, 114.1740, [114.15, 22.28, 114.25, 22.35]),
+        "中国": (35.8617, 104.1954, [73.5, 18.0, 134.8, 53.6]),
+        "china": (35.8617, 104.1954, [73.5, 18.0, 134.8, 53.6]),
         "北京": (39.9042, 116.4074, [116.2, 39.8, 116.6, 40.0]),
         "beijing": (39.9042, 116.4074, [116.2, 39.8, 116.6, 40.0]),
         "上海": (31.2304, 121.4737, [121.3, 31.1, 121.6, 31.4]),
@@ -87,7 +91,7 @@ def _fallback_places() -> Dict[str, Tuple[float, float, List[float]]]:
 
 def _match_fallback_place(place_name: str) -> Tuple[float, float, List[float]] | None:
     place_lower = (place_name or "").strip().lower()
-    for name, value in _fallback_places().items():
+    for name, value in sorted(_fallback_places().items(), key=lambda item: len(item[0]), reverse=True):
         if name in place_lower or place_lower in name:
             return value
     return None

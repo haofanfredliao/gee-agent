@@ -51,10 +51,18 @@ def _normalize_place(place_name: str) -> str:
 _PLACE_ALIASES = {
     "香港": "Hong Kong",
     "香港特别行政区": "Hong Kong",
+    "香港岛": "Hong Kong Island",
+    "港岛": "Hong Kong Island",
+    "hong kong sar": "Hong Kong",
+    "hong kong special administrative region": "Hong Kong",
+    "中国": "China",
+    "中华人民共和国": "China",
     "深圳": "Shenzhen",
     "深圳市": "Shenzhen",
     "广州": "Guangzhou",
     "广州市": "Guangzhou",
+    "广州天河区": "Tianhe District, Guangzhou",
+    "广州市天河区": "Tianhe District, Guangzhou",
     "北京": "Beijing",
     "北京市": "Beijing",
     "上海": "Shanghai",
@@ -100,6 +108,80 @@ def _candidate_geometry(item: Dict[str, Any]) -> Dict[str, Any] | None:
     return None
 
 
+def _normalized_match_text(text: str) -> str:
+    normalized = _normalize_place(text).lower()
+    normalized = re.sub(r"[，,\s.'’\-_/()]+", "", normalized)
+    return normalized
+
+
+def _query_tokens(place_name: str) -> List[str]:
+    source = _normalize_place(place_name)
+    tokens: List[str] = [source]
+
+    for part in re.split(r"[,，/]+|\s+", source):
+        part = part.strip()
+        if part:
+            tokens.append(part)
+
+    for chunk in re.findall(r"[\u4e00-\u9fff]{2,}", source):
+        tokens.append(chunk)
+        simplified = re.sub(r"(特别行政区|特別行政區|自治区|自治區|省|市|区|區|县|縣)$", "", chunk)
+        if simplified and simplified != chunk and len(simplified) >= 2:
+            tokens.append(simplified)
+
+    english_suffixes = re.compile(
+        r"\b(special administrative region|autonomous region|province|city|district|county|region)\b",
+        re.IGNORECASE,
+    )
+    for part in list(tokens):
+        simplified = english_suffixes.sub("", part)
+        simplified = re.sub(r"\s+", " ", simplified).strip(" ,")
+        if simplified and simplified != part and len(simplified) >= 2:
+            tokens.append(simplified)
+
+    seen: set[str] = set()
+    unique: List[str] = []
+    for token in tokens:
+        normalized = _normalized_match_text(token)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(token)
+    return unique
+
+
+def _is_district_like_query(place_name: str) -> bool:
+    normalized = _normalize_place(place_name).lower()
+    return any(term in normalized for term in ("区", "區", "县", "縣", "district", "county", "borough"))
+
+
+def _candidate_search_blob(item: Dict[str, Any]) -> str:
+    parts: List[str] = []
+    for key in ("display_name", "name", "category", "class", "type"):
+        value = item.get(key)
+        if value:
+            parts.append(str(value))
+    address = item.get("address") or {}
+    if isinstance(address, dict):
+        for key in (
+            "country",
+            "state",
+            "province",
+            "municipality",
+            "city",
+            "city_district",
+            "county",
+            "district",
+            "suburb",
+            "town",
+            "village",
+        ):
+            value = address.get(key)
+            if value:
+                parts.append(str(value))
+    return " | ".join(parts)
+
+
 def _score_candidate(item: Dict[str, Any], place_name: str) -> tuple[int, float]:
     geom = _candidate_geometry(item)
     category = item.get("category") or item.get("class") or ""
@@ -108,8 +190,11 @@ def _score_candidate(item: Dict[str, Any], place_name: str) -> tuple[int, float]
     display = (item.get("display_name") or "").lower()
     name = (item.get("name") or "").lower()
     query = _normalize_place(place_name).lower()
+    search_blob = _normalized_match_text(_candidate_search_blob(item))
+    tokens = [_normalized_match_text(token) for token in _query_tokens(place_name)]
     extratags = item.get("extratags") or {}
     importance = float(item.get("importance") or 0)
+    admin_level = str(extratags.get("admin_level") or "")
 
     score = 0
     if geom:
@@ -124,8 +209,24 @@ def _score_candidate(item: Dict[str, Any], place_name: str) -> tuple[int, float]
         score += 10
     if query and (query in display or query in name):
         score += 20
+    matched_tokens = 0
+    for token in tokens:
+        if token and token in search_blob:
+            matched_tokens += 1
+            score += 12
+    if matched_tokens >= 2:
+        score += 25
     if "boundary" in display:
         score += 5
+    if _is_district_like_query(place_name):
+        if admin_level in {"5", "6", "7", "8", "9", "10"}:
+            score += 22
+        if any(term in display for term in ("district", "county", "borough")):
+            score += 18
+        if typ in {"city", "municipality", "state", "province"}:
+            score -= 20
+        if admin_level == "4":
+            score -= 12
     return score, importance
 
 
@@ -182,6 +283,8 @@ def _summarize_candidate(item: Dict[str, Any], place_name: str) -> Dict[str, Any
 
 
 def _is_ambiguous(ranked: List[Dict[str, Any]], place_name: str) -> bool:
+    if _is_hong_kong(place_name):
+        return False
     if len(ranked) < 2:
         return False
     first = ranked[0]
